@@ -9,6 +9,7 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
+    wincode::{containers::Pod, SchemaRead, SchemaWrite},
 };
 #[cfg(feature = "dev-context-only-utils")]
 use {solana_bls_signatures::keypair::Keypair as BLSKeypair, solana_keypair::Keypair};
@@ -19,32 +20,46 @@ pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";
 /// Block, a (slot, block_id) tuple
 pub type Block = (Slot, Hash);
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, SchemaWrite, SchemaRead)]
 /// BLS vote message, we need rank to look up pubkey
 pub struct VoteMessage {
     /// The vote
     pub vote: Vote,
     /// The signature
+    #[wincode(with = "Pod<BLSSignature>")]
     pub signature: BLSSignature,
     /// The rank of the validator
     pub rank: u16,
 }
 
 /// Certificate details
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize,
+    SchemaWrite,
+    SchemaRead,
+)]
 pub enum CertificateType {
     /// Finalize certificate
     Finalize(Slot),
     /// Fast finalize certificate
-    FinalizeFast(Slot, Hash),
+    FinalizeFast(Slot, #[wincode(with = "Pod<Hash>")] Hash),
     /// Notarize certificate
-    Notarize(Slot, Hash),
+    Notarize(Slot, #[wincode(with = "Pod<Hash>")] Hash),
     /// Notarize fallback certificate
-    NotarizeFallback(Slot, Hash),
+    NotarizeFallback(Slot, #[wincode(with = "Pod<Hash>")] Hash),
     /// Skip certificate
     Skip(Slot),
     /// Genesis certificate
-    Genesis(Slot, Hash),
+    Genesis(Slot, #[wincode(with = "Pod<Hash>")] Hash),
 }
 
 impl CertificateType {
@@ -211,18 +226,19 @@ pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
 }
 
 /// Definition of a consensus certificate.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, SchemaWrite, SchemaRead)]
 pub struct Certificate {
     /// The type of the certificate.
     pub cert_type: CertificateType,
     /// The signature
+    #[wincode(with = "Pod<BLSSignature>")]
     pub signature: BLSSignature,
     /// The bitmap for validators, see solana-signer-store for encoding format
     pub bitmap: Vec<u8>,
 }
 
 /// Different types of consensus messages.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, SchemaWrite, SchemaRead)]
 #[allow(clippy::large_enum_variant)]
 pub enum ConsensusMessage {
     /// Vote message, with the vote and the rank of the validator.

@@ -82,6 +82,7 @@ solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
 solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
+wincode = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 agave-logger = { workspace = true }
