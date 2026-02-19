@@ -113,7 +113,7 @@ enum CertVerifyError {
 ///
 /// Additionally inserts valid [`CertificateType`]s into [`verified_certs_sets`].
 ///
-/// Function expects that the caller has already dedupped the certs to verify i.e.
+/// Function expects that the caller has already deduped the certs to verify i.e.
 /// none of the certs appear in the [`verified_certs_set`].
 pub(super) fn verify_and_send_certificates(
     verified_certs_set: &mut HashSet<CertificateType>,
