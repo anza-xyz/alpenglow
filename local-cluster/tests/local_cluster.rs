@@ -5631,7 +5631,7 @@ fn test_duplicate_shreds_switch_failure() {
     );
 
     let validator_to_slots = vec![
-        (duplicate_leader_validator_pubkey, 52),
+        (duplicate_leader_validator_pubkey, 56),
         (target_switch_fork_validator_pubkey, 8),
         // The ideal sequence of events for the `duplicate_fork_validator1_pubkey` validator would go:
         // 1. Vote for duplicate block `D`
@@ -6237,7 +6237,7 @@ fn test_alpenglow_basic_equivocation() {
     let node_stakes = vec![node_a_stake, node_b_stake];
 
     // Create leader schedule with A as the leader
-    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[4, 0]);
+    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[8, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -6434,7 +6434,7 @@ fn test_alpenglow_migration(
 #[test]
 #[serial]
 fn test_alpenglow_migration_4() {
-    test_alpenglow_migration(4, "test_alpenglow_migration_4", &[4, 4, 4, 4]);
+    test_alpenglow_migration(4, "test_alpenglow_migration_4", &[8, 8, 8, 8]);
 }
 
 #[test]
@@ -6443,7 +6443,7 @@ fn test_alpenglow_restart_post_migration() {
     let test_name = "test_alpenglow_restart_post_migration";
 
     // Start a 2 node cluster and have it go through the migration
-    let (mut cluster, _, _) = test_alpenglow_migration(2, test_name, &[4, 4]);
+    let (mut cluster, _, _) = test_alpenglow_migration(2, test_name, &[8, 8]);
 
     // Now restart one of the nodes. This causes the cluster to temporarily halt
     let node_pubkey = cluster.get_node_pubkeys()[0];
@@ -6470,7 +6470,7 @@ fn test_alpenglow_missed_migration_entirely() {
     // Critical that the third node is not in the leader schedule, as since
     // we clear blockstore later, we could end up producing duplicate blocks
     let (mut cluster, validator_keys, migration_slot) =
-        test_alpenglow_migration(3, test_name, &[4, 4, 0]);
+        test_alpenglow_migration(3, test_name, &[8, 8, 0]);
 
     // Now kill the second node
     let node_pubkey = validator_keys[2].pubkey();
@@ -6510,7 +6510,7 @@ fn test_alpenglow_missed_migration_completion() {
     // Critical that the second node is not in the leader schedule, as since
     // we clear blockstore later, we could end up producing duplicate blocks
     let (mut cluster, validator_keys, _migration_slot) =
-        test_alpenglow_migration(3, test_name, &[4, 0, 4]);
+        test_alpenglow_migration(3, test_name, &[8, 0, 8]);
 
     // Figure out the genesis slot
     info!("Determining the genesis slot");
@@ -6668,7 +6668,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     let node_a_turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
 
     // Create leader schedule
-    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[0, 4]);
+    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[0, 8]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -6866,7 +6866,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     // Create leader schedule with Node A as primary leader
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[4, 0, 0, 0]);
+        create_custom_leader_schedule_with_random_keys(&[8, 0, 0, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -7218,7 +7218,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
 
     // Create leader schedule with A as perpetual leader
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[0, 0, 0, 4]);
+        create_custom_leader_schedule_with_random_keys(&[0, 0, 0, 8]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -7506,7 +7506,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 
     // Create leader schedule with Node B as primary leader (Node A will go offline)
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[0, 4, 0]);
+        create_custom_leader_schedule_with_random_keys(&[0, 8, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -7795,7 +7795,7 @@ fn test_alpenglow_add_missing_parent_ready() {
 
     // Create leader schedule with Node B as primary leader (Node A will go offline)
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[0, 4, 0]);
+        create_custom_leader_schedule_with_random_keys(&[0, 8, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -8126,7 +8126,7 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
 
     // Leaders alternate every 4 slots: 0-3 = node 0, 4-7 = node 1, etc.
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[4, 4, 0, 0]);
+        create_custom_leader_schedule_with_random_keys(&[8, 8, 0, 0]);
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
     };

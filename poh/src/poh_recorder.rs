@@ -585,7 +585,7 @@ impl PohRecorder {
         &self,
         footer: &BlockFooterV1,
         working_bank: &WorkingBank,
-    ) -> std::result::Result<(), Option<SendError<WorkingBankEntryMarker>>> {
+    ) -> std::result::Result<(), SendError<WorkingBankEntryMarker>> {
         // Wait for the bank to be frozen with timeout
         // TODO: change this to use DELTA_BLOCK from votor instead.
         let start = Instant::now();
@@ -599,10 +599,18 @@ impl PohRecorder {
         // If the bank still isn't frozen, we've timed out
         if !working_bank.bank.is_frozen() {
             error!(
-                "slot = {} block production failure. bank freezing timed out.",
-                working_bank.bank.slot()
+                "slot = {} block production failure. ReplayStage is backed up, after the final \
+                 tick waited {} ms and still no freeze.",
+                working_bank.bank.slot(),
+                start.elapsed().as_millis(),
             );
-            return Err(None);
+            return Err(SendError((
+                working_bank.bank.clone(),
+                (
+                    EntryMarker::Marker(VersionedBlockMarker::new_block_footer(footer.clone())),
+                    working_bank.max_tick_height - 1,
+                ),
+            )));
         }
 
         // Send out the block footer - we now have the bank hash
@@ -625,7 +633,7 @@ impl PohRecorder {
                 "slot = {} block production failure. failed to broadcast footer",
                 working_bank.bank.slot()
             );
-            return Err(send_result.err());
+            return send_result;
         }
 
         Ok(())
@@ -670,10 +678,9 @@ impl PohRecorder {
 
                 if let Some(footer) = footer.as_ref() {
                     match self.wait_for_freeze_and_send_footer(footer, working_bank) {
-                        Ok(()) => {}        // Continue processing
-                        Err(None) => break, // Timeout - break without updating send_result
-                        Err(Some(e)) => {
-                            // Send failed - update send_result and break
+                        Ok(()) => {} // Continue processing
+                        Err(e) => {
+                            // Timeout or Send failed - update send_result and break
                             send_result = Err(e);
                             break;
                         }
