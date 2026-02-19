@@ -15,6 +15,21 @@ use {
 pub type NodeIdToVoteAccounts = HashMap<Pubkey, NodeVoteAccounts>;
 pub type EpochAuthorizedVoters = HashMap<Pubkey, Pubkey>;
 
+/// Entry in the [`BLSPubkeyToRankMap`] associating a validator's identity
+/// pubkey and BLS pubkey with its stake.
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
+pub struct BLSPubkeyStakeEntry {
+    pub pubkey: Pubkey,
+    pub bls_pubkey: BLSPubkey,
+    pub stake: u64,
+}
+
+/// Container to store a mapping from validator [`BLSPubkey`] to rank.
+///
+/// A validator with a smaller rank has a higher stake.
+/// Container also supports lookups from rank to [`BLSPubkeyStakeEntry`].
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
@@ -22,7 +37,7 @@ pub struct BLSPubkeyToRankMap {
     rank_map: HashMap<BLSPubkey, u16>,
     //TODO(wen): We can make SortedPubkeys a Vec<BLSPubkey> after we remove ed25519
     // pubkey from certificate pool.
-    sorted_pubkeys: Vec<(Pubkey, BLSPubkey, u64)>,
+    sorted_pubkeys: Vec<BLSPubkeyStakeEntry>,
 }
 
 pub(crate) fn bls_pubkey_compressed_bytes_to_bls_pubkey(
@@ -35,30 +50,34 @@ pub(crate) fn bls_pubkey_compressed_bytes_to_bls_pubkey(
 
 impl BLSPubkeyToRankMap {
     pub fn new(epoch_vote_accounts_hash_map: &VoteAccountsHashMap) -> Self {
-        let mut pubkey_stake_pair_vec: Vec<(&Pubkey, BLSPubkey, u64)> =
-            epoch_vote_accounts_hash_map
-                .iter()
-                .filter_map(|(pubkey, (stake, account))| {
-                    if *stake > 0 {
-                        account
-                            .vote_state_view()
-                            .bls_pubkey_compressed()
-                            .map(bls_pubkey_compressed_bytes_to_bls_pubkey)
-                            .and_then(|bls_pubkey| {
-                                bls_pubkey.map(|bls_pubkey| (pubkey, bls_pubkey, *stake))
-                            })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        let mut pubkey_stake_pair_vec: Vec<(Pubkey, BLSPubkey, u64)> = epoch_vote_accounts_hash_map
+            .iter()
+            .filter_map(|(pubkey, (stake, account))| {
+                if *stake > 0 {
+                    account
+                        .vote_state_view()
+                        .bls_pubkey_compressed()
+                        .map(bls_pubkey_compressed_bytes_to_bls_pubkey)
+                        .and_then(|bls_pubkey| {
+                            bls_pubkey.map(|bls_pubkey| (*pubkey, bls_pubkey, *stake))
+                        })
+                } else {
+                    None
+                }
+            })
+            .collect();
         pubkey_stake_pair_vec.sort_by(|(_, a_pubkey, a_stake), (_, b_pubkey, b_stake)| {
             b_stake.cmp(a_stake).then(a_pubkey.cmp(b_pubkey))
         });
         let mut sorted_pubkeys = Vec::new();
         let mut bls_pubkey_to_rank_map = HashMap::new();
         for (rank, (pubkey, bls_pubkey, stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
-            sorted_pubkeys.push((*pubkey, bls_pubkey, stake));
+            let entry = BLSPubkeyStakeEntry {
+                pubkey,
+                bls_pubkey,
+                stake,
+            };
+            sorted_pubkeys.push(entry);
             bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
         }
         Self {
@@ -79,7 +98,7 @@ impl BLSPubkeyToRankMap {
         self.rank_map.get(bls_pubkey)
     }
 
-    pub fn get_pubkey_and_stake(&self, index: usize) -> Option<&(Pubkey, BLSPubkey, u64)> {
+    pub fn get_pubkey_and_stake(&self, index: usize) -> Option<&BLSPubkeyStakeEntry> {
         self.sorted_pubkeys.get(index)
     }
 }
@@ -443,7 +462,11 @@ pub(crate) mod tests {
             assert!(index >= &0 && index < &(num_vote_accounts as u16));
             assert_eq!(
                 bls_pubkey_to_rank_map.get_pubkey_and_stake(*index as usize),
-                Some(&(pubkey, bls_pubkey, stake))
+                Some(&BLSPubkeyStakeEntry {
+                    pubkey,
+                    bls_pubkey,
+                    stake,
+                })
             );
         }
 

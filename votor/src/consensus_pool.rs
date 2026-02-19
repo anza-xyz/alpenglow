@@ -81,17 +81,17 @@ fn get_key_and_stakes(
     let epoch_stakes = root_bank
         .epoch_stakes_from_slot(slot)
         .ok_or(AddVoteError::EpochStakesNotFound(0))?;
-    let Some((vote_key, _, stake)) = epoch_stakes
+    let Some(entry) = epoch_stakes
         .bls_pubkey_to_rank_map()
         .get_pubkey_and_stake(rank as usize)
     else {
         return Err(AddVoteError::InvalidRank(rank));
     };
-    if *stake == 0 {
+    if entry.stake == 0 {
         // Since we have a valid rank, this should never happen, there is no rank for zero stake.
-        panic!("Validator stake is zero for pubkey: {vote_key}");
+        panic!("Validator stake is zero for pubkey: {}", entry.pubkey);
     }
-    Ok((*vote_key, *stake, epoch_stakes.total_stake()))
+    Ok((entry.pubkey, entry.stake, epoch_stakes.total_stake()))
 }
 
 pub struct ConsensusPool {

@@ -93,12 +93,10 @@ impl ValidatedRewardCert {
         let mut validators = Vec::with_capacity(max_validators);
 
         let mut rank_map = |ind: usize| {
-            rank_map
-                .get_pubkey_and_stake(ind)
-                .map(|(pubkey, bls_pubkey, _)| {
-                    validators.push(*pubkey);
-                    *bls_pubkey
-                })
+            rank_map.get_pubkey_and_stake(ind).map(|entry| {
+                validators.push(entry.pubkey);
+                entry.bls_pubkey
+            })
         };
 
         if let Some(skip) = skip {
@@ -214,7 +212,7 @@ mod tests {
         let signing_keys = (0..num_validators)
             .map(|index| {
                 keypair_map
-                    .get(&rank_map.get_pubkey_and_stake(index).unwrap().1)
+                    .get(&rank_map.get_pubkey_and_stake(index).unwrap().bls_pubkey)
                     .unwrap()
             })
             .collect::<Vec<_>>();
