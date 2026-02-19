@@ -217,14 +217,14 @@ impl BLSSigVerifier {
         };
 
         // Invalid rank
-        let (pubkey, bls_pubkey, _) = rank_map
+        let entry = rank_map
             .get_pubkey_and_stake(vote_message.rank.into())
             .or_else(|| {
                 self.stats.received_bad_rank += 1;
                 None
             })?;
 
-        Some((*pubkey, *bls_pubkey))
+        Some((entry.pubkey, entry.bls_pubkey))
     }
 
     fn check_stale_vote(&mut self, vote_message: &VoteMessage, root_bank: &Bank) -> bool {
