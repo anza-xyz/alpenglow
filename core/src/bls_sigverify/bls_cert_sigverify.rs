@@ -39,16 +39,16 @@ impl Stats {
         let Self {
             certs_to_sig_verify,
             sig_verified_certs,
-            stake_verification_failed: not_enough_stake,
-            signature_verification_failed: bad_signature,
+            stake_verification_failed,
+            signature_verification_failed,
             pool_sent,
             pool_channel_full,
             fn_verify_and_send_certs_stats,
         } = other;
         self.certs_to_sig_verify += certs_to_sig_verify;
         self.sig_verified_certs += sig_verified_certs;
-        self.stake_verification_failed += not_enough_stake;
-        self.signature_verification_failed += bad_signature;
+        self.stake_verification_failed += stake_verification_failed;
+        self.signature_verification_failed += signature_verification_failed;
         self.pool_sent += pool_sent;
         self.pool_channel_full += pool_channel_full;
         self.fn_verify_and_send_certs_stats
@@ -112,12 +112,18 @@ enum CertVerifyError {
 /// Verifies certs and sends the verified certs to the consensus pool.
 ///
 /// Additionally inserts valid [`CertificateType`]s into [`verified_certs_sets`].
+///
+/// Function expects that the caller has already dedupped the certs to verify i.e.
+/// none of the certs appear in the [`verified_certs_set`].
 pub(super) fn verify_and_send_certificates(
     verified_certs_set: &mut HashSet<CertificateType>,
     certs: Vec<Certificate>,
     bank: &Bank,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
 ) -> Result<Stats, Error> {
+    for cert in certs.iter() {
+        debug_assert!(!verified_certs_set.contains(&cert.cert_type));
+    }
     let mut measure = Measure::start("verify_and_send_certificates");
     let mut stats = Stats::default();
 
