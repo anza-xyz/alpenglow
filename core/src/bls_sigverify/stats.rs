@@ -1,12 +1,9 @@
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::qualifiers;
 use {
-    super::bls_vote_sigverify::Stats as VoteStats,
+    super::{bls_cert_sigverify::Stats as CertStats, bls_vote_sigverify::Stats as VoteStats},
     histogram::Histogram,
-    std::{
-        sync::atomic::{AtomicU64, Ordering},
-        time::{Duration, Instant},
-    },
+    std::time::{Duration, Instant},
 };
 
 pub(super) const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1);
@@ -148,155 +145,71 @@ impl PacketStats {
 // We are adding our own stats because we do BLS decoding in batch verification,
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-pub(super) struct BLSSigVerifierStats {
-    pub(super) total_valid_packets: AtomicU64,
-    pub(super) preprocess_count: AtomicU64,
-    pub(super) preprocess_elapsed_us: AtomicU64,
-    pub(super) certs_batch_count: AtomicU64,
-    pub(super) certs_batch_elapsed_us: AtomicU64,
-
+pub(super) struct Stats {
     pub(super) vote_stats: VoteStats,
+    pub(super) cert_stats: CertStats,
 
-    /// Number of msgs sent to the consensus pool after verifying certs.
-    pub(super) verify_certs_consensus_sent: AtomicU64,
-    /// Number of times the consensus channel was full while verifying certs.
-    pub(super) verify_certs_consensus_channel_full: AtomicU64,
+    pub(super) preprocess_count: u64,
+    pub(super) preprocess_elapsed_us: u64,
 
-    pub(super) received: AtomicU64,
-    pub(super) received_bad_rank: AtomicU64,
-    pub(super) received_bad_signature_certs: AtomicU64,
-    pub(super) received_not_enough_stake: AtomicU64,
-    pub(super) received_discarded: AtomicU64,
-    pub(super) received_malformed: AtomicU64,
-    pub(super) received_no_epoch_stakes: AtomicU64,
-    pub(super) received_old: AtomicU64,
-    pub(super) received_verified: AtomicU64,
-    pub(super) received_votes: AtomicU64,
+    pub(super) received: u64,
+    pub(super) received_bad_rank: u64,
+    pub(super) received_discarded: u64,
+    pub(super) received_malformed: u64,
+    pub(super) received_no_epoch_stakes: u64,
+    pub(super) received_old: u64,
+    pub(super) received_verified: u64,
+
     pub(super) last_stats_logged: Instant,
 }
 
-impl Default for BLSSigVerifierStats {
+impl Default for Stats {
     fn default() -> Self {
         Self {
             vote_stats: VoteStats::default(),
-            total_valid_packets: AtomicU64::new(0),
+            cert_stats: CertStats::default(),
 
-            preprocess_count: AtomicU64::new(0),
-            preprocess_elapsed_us: AtomicU64::new(0),
-            certs_batch_count: AtomicU64::new(0),
-            certs_batch_elapsed_us: AtomicU64::new(0),
+            preprocess_count: 0,
+            preprocess_elapsed_us: 0,
 
-            verify_certs_consensus_sent: AtomicU64::new(0),
-            verify_certs_consensus_channel_full: AtomicU64::new(0),
-
-            received: AtomicU64::new(0),
-            received_bad_rank: AtomicU64::new(0),
-            received_bad_signature_certs: AtomicU64::new(0),
-            received_not_enough_stake: AtomicU64::new(0),
-            received_discarded: AtomicU64::new(0),
-            received_malformed: AtomicU64::new(0),
-            received_no_epoch_stakes: AtomicU64::new(0),
-            received_old: AtomicU64::new(0),
-            received_verified: AtomicU64::new(0),
-            received_votes: AtomicU64::new(0),
+            received: 0,
+            received_bad_rank: 0,
+            received_discarded: 0,
+            received_malformed: 0,
+            received_no_epoch_stakes: 0,
+            received_old: 0,
+            received_verified: 0,
             last_stats_logged: Instant::now(),
         }
     }
 }
 
-impl BLSSigVerifierStats {
+impl Stats {
     /// If sufficient time has passed since last report, report stats.
-    pub(super) fn maybe_report_stats(&mut self) {
+    pub(super) fn maybe_report(&mut self) {
         let now = Instant::now();
         let time_since_last_log = now.duration_since(self.last_stats_logged);
         if time_since_last_log < STATS_INTERVAL_DURATION {
             return;
         }
         self.vote_stats.report();
+        self.cert_stats.report();
         datapoint_info!(
             "bls_sig_verifier_stats",
-            (
-                "preprocess_count",
-                self.preprocess_count.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "preprocess_elapsed_us",
-                self.preprocess_elapsed_us.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "certs_batch_count",
-                self.certs_batch_count.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "certs_batch_elapsed_us",
-                self.certs_batch_elapsed_us.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_certs_consensus_sent",
-                self.verify_certs_consensus_sent.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_certs_consensus_channel_full",
-                self.verify_certs_consensus_channel_full
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received",
-                self.received.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_bad_rank",
-                self.received_bad_rank.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_bad_signature_certs",
-                self.received_bad_signature_certs.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_not_enough_stake",
-                self.received_not_enough_stake.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_discarded",
-                self.received_discarded.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_old",
-                self.received_old.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_verified",
-                self.received_verified.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_votes",
-                self.received_votes.load(Ordering::Relaxed) as i64,
-                i64
-            ),
+            ("preprocess_count", self.preprocess_count, i64),
+            ("preprocess_elapsed_us", self.preprocess_elapsed_us, i64),
+            ("received", self.received, i64),
+            ("received_bad_rank", self.received_bad_rank, i64),
+            ("received_discarded", self.received_discarded, i64),
+            ("received_old", self.received_old, i64),
+            ("received_verified", self.received_verified, i64),
             (
                 "received_no_epoch_stakes",
-                self.received_no_epoch_stakes.load(Ordering::Relaxed) as i64,
+                self.received_no_epoch_stakes,
                 i64
             ),
-            (
-                "received_malformed",
-                self.received_malformed.load(Ordering::Relaxed) as i64,
-                i64
-            ),
+            ("received_malformed", self.received_malformed, i64),
         );
-        *self = BLSSigVerifierStats::default();
+        *self = Stats::default();
     }
 }

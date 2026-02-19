@@ -4,7 +4,7 @@ use {
     super::{
         bls_cert_sigverify::{verify_and_send_certificates, Error as VerifyCertsError},
         bls_vote_sigverify::{verify_and_send_votes, Error as VerifyVotesError, VoteToVerify},
-        stats::BLSSigVerifierStats,
+        stats::Stats,
     },
     crate::cluster_info_vote_listener::VerifiedVoteSender,
     crossbeam_channel::Sender,
@@ -27,7 +27,7 @@ use {
     },
     std::{
         collections::{HashMap, HashSet},
-        sync::{atomic::Ordering, Arc, RwLock},
+        sync::Arc,
     },
     thiserror::Error,
 };
@@ -46,8 +46,8 @@ pub struct BLSSigVerifier {
     channel_to_pool: Sender<Vec<ConsensusMessage>>,
     channel_to_metrics: ConsensusMetricsEventSender,
     sharable_banks: SharableBanks,
-    stats: BLSSigVerifierStats,
-    verified_certs: RwLock<HashSet<CertificateType>>,
+    stats: Stats,
+    verified_certs: HashSet<CertificateType>,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
@@ -56,14 +56,6 @@ pub struct BLSSigVerifier {
     /// Buffer to collect votes to be verified.  We try to minimise reallocations by reusing the
     /// buffer across consecutive calls to [`Self::verify_send_batches()`].
     votes_buffer: Vec<VoteToVerify>,
-
-    // Recycled buffers implementing the Buffer Recycling pattern.
-    //
-    // The `extract_and_filter_messages` function demultiplexes mixed consensus messages into
-    // distinct vectors for votes, certificates, and metrics. Since the quantity of each message
-    // type is dynamic, we use these persistent buffers (`cert_buffer`)
-    // to amortize the cost of heap allocations over time.
-    cert_buffer: Vec<Certificate>,
 }
 
 impl BLSSigVerifier {
@@ -82,15 +74,14 @@ impl BLSSigVerifier {
             channel_to_repair,
             channel_to_reward,
             channel_to_pool,
-            stats: BLSSigVerifierStats::default(),
-            verified_certs: RwLock::new(HashSet::new()),
+            stats: Stats::default(),
+            verified_certs: HashSet::new(),
             channel_to_metrics,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
             cluster_info,
             leader_schedule,
             votes_buffer: Vec::new(),
-            cert_buffer: Vec::new(),
         }
     }
 
@@ -107,22 +98,14 @@ impl BLSSigVerifier {
             self.prune_caches(&root_bank);
         }
 
-        // Recycle buffers.
-        // Note: `cert_buffer` and `metric_buffer` are usually empty from draining,
-        // but we clear them explicitly to guarantee a clean state.
         self.votes_buffer.clear();
-        self.cert_buffer.clear();
-
-        self.extract_and_filter_messages(batches, &root_bank);
+        let certs = self.extract_and_filter_messages(batches, &root_bank);
 
         preprocess_time.stop();
-        self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
-        self.stats
-            .preprocess_elapsed_us
-            .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
+        self.stats.preprocess_count += 1;
+        self.stats.preprocess_elapsed_us += preprocess_time.as_us();
 
         let votes_buffer = std::mem::take(&mut self.votes_buffer);
-        let cert_buffer = std::mem::take(&mut self.cert_buffer);
 
         // Perform signature verification
         let (votes_result, certs_result) = rayon::join(
@@ -141,10 +124,9 @@ impl BLSSigVerifier {
             },
             || {
                 verify_and_send_certificates(
-                    cert_buffer,
+                    &mut self.verified_certs,
+                    certs,
                     &root_bank,
-                    &self.verified_certs,
-                    &self.stats,
                     &self.channel_to_pool,
                 )
             },
@@ -152,40 +134,40 @@ impl BLSSigVerifier {
 
         let (votes_buffer, vote_stats) = votes_result?;
         self.votes_buffer = votes_buffer;
-        let () = certs_result?;
+        let cert_stats = certs_result?;
 
         // Send to RPC service for last voted tracking
         self.alpenglow_last_voted
             .update_last_voted(&last_voted_slots);
 
         self.stats.vote_stats.merge(vote_stats);
-        self.stats.maybe_report_stats();
+        self.stats.cert_stats.merge(cert_stats);
+        self.stats.maybe_report();
         Ok(())
     }
 
     fn prune_caches(&mut self, root_bank: &Bank) {
         self.last_checked_root_slot = root_bank.slot();
         self.verified_certs
-            .write()
-            .unwrap()
             .retain(|cert| cert.slot() > root_bank.slot());
     }
 
-    fn extract_and_filter_messages(&mut self, batches: Vec<PacketBatch>, root_bank: &Bank) {
+    fn extract_and_filter_messages(
+        &mut self,
+        batches: Vec<PacketBatch>,
+        root_bank: &Bank,
+    ) -> Vec<Certificate> {
+        let mut certs = Vec::new();
         for packet in batches.iter().flatten() {
-            self.stats.received.fetch_add(1, Ordering::Relaxed);
+            self.stats.received += 1;
 
             if packet.meta().discard() {
-                self.stats
-                    .received_discarded
-                    .fetch_add(1, Ordering::Relaxed);
+                self.stats.received_discarded += 1;
                 continue;
             }
 
             let Ok(message) = packet.deserialize_slice::<ConsensusMessage, _>(..) else {
-                self.stats
-                    .received_malformed
-                    .fetch_add(1, Ordering::Relaxed);
+                self.stats.received_malformed += 1;
                 continue;
             };
 
@@ -200,17 +182,6 @@ impl BLSSigVerifier {
                         continue;
                     }
 
-                    // Push the vote to the recycled buffer.
-                    //
-                    // Note: We must store owned copies of `VoteMessage` here because standard
-                    // `serde` deserialization creates new instances on the stack from the packet
-                    // bytes. We cannot hold references to these stack-allocated objects beyond
-                    // the current loop iteration.
-                    //
-                    // If we switch to a zero-copy deserialization framework (e.g. `bytemuck::Pod`)
-                    // that allows viewing fields directly from the raw packet bytes, `VoteToVerify`
-                    // could be refactored to hold references/slices, avoiding the memory copy
-                    // entirely.
                     self.votes_buffer.push(VoteToVerify {
                         vote_message,
                         bls_pubkey,
@@ -221,35 +192,18 @@ impl BLSSigVerifier {
                 ConsensusMessage::Certificate(cert) => {
                     // Only need certs newer than root slot
                     if cert.cert_type.slot() <= root_bank.slot() {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        self.stats.received_old += 1;
                         continue;
                     }
-                    self.cert_buffer.push(cert);
+                    if self.verified_certs.contains(&cert.cert_type) {
+                        self.stats.received_verified += 1;
+                        continue;
+                    }
+                    certs.push(cert);
                 }
             }
         }
-
-        // Filter out certificates that have already been verified.
-        //
-        // Under normal network conditions, most incoming certificates are
-        // redundant because the node will have already generated them locally
-        // via the consensus pool.
-        if !self.cert_buffer.is_empty() {
-            let verified_certs = self.verified_certs.read().unwrap();
-            let len_before = self.cert_buffer.len();
-
-            // apply in-place filtering
-            self.cert_buffer
-                .retain(|cert| !verified_certs.contains(&cert.cert_type));
-
-            let len_after = self.cert_buffer.len();
-            let duplicates = len_before - len_after;
-            if duplicates > 0 {
-                self.stats
-                    .received_verified
-                    .fetch_add(duplicates as u64, Ordering::Relaxed);
-            }
-        }
+        certs
     }
 
     fn resolve_voter(
@@ -258,9 +212,7 @@ impl BLSSigVerifier {
         root_bank: &Bank,
     ) -> Option<(Pubkey, BlsPubkey)> {
         let Some(rank_map) = root_bank.get_rank_map(vote_message.vote.slot()) else {
-            self.stats
-                .received_no_epoch_stakes
-                .fetch_add(1, Ordering::Relaxed);
+            self.stats.received_no_epoch_stakes += 1;
             return None;
         };
 
@@ -268,14 +220,14 @@ impl BLSSigVerifier {
         let (pubkey, bls_pubkey, _) = rank_map
             .get_pubkey_and_stake(vote_message.rank.into())
             .or_else(|| {
-                self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
+                self.stats.received_bad_rank += 1;
                 None
             })?;
 
         Some((*pubkey, *bls_pubkey))
     }
 
-    fn check_stale_vote(&self, vote_message: &VoteMessage, root_bank: &Bank) -> bool {
+    fn check_stale_vote(&mut self, vote_message: &VoteMessage, root_bank: &Bank) -> bool {
         // if newer than root, we should keep
         if vote_message.vote.slot() > root_bank.slot() {
             return false;
@@ -292,7 +244,7 @@ impl BLSSigVerifier {
         }
 
         // otherwise, record stats and discard
-        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+        self.stats.received_old += 1;
         true
     }
 }
@@ -473,14 +425,8 @@ mod tests {
             .unwrap();
         assert_eq!(receiver.try_iter().flatten().count(), 2);
         assert_eq!(verifier.stats.vote_stats.pool_sent, 1);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_certs_consensus_sent
-                .load(Ordering::Relaxed),
-            1
-        );
-        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
+        assert_eq!(verifier.stats.cert_stats.pool_sent, 1);
+        assert_eq!(verifier.stats.received, 2);
         let received_verified_votes1 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes1,
@@ -503,14 +449,8 @@ mod tests {
 
         assert_eq!(receiver.try_iter().flatten().count(), 1);
         assert_eq!(verifier.stats.vote_stats.pool_sent, 2);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_certs_consensus_sent
-                .load(Ordering::Relaxed),
-            1
-        );
-        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 3); // 2 + 1 = 3
+        assert_eq!(verifier.stats.cert_stats.pool_sent, 1);
+        assert_eq!(verifier.stats.received, 3); // 2 + 1 = 3
         let received_verified_votes2 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes2,
@@ -533,7 +473,7 @@ mod tests {
             .unwrap();
         assert_eq!(receiver.try_iter().flatten().count(), 1);
         assert_eq!(verifier.stats.vote_stats.pool_sent, 0);
-        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received, 0);
         let received_verified_votes3 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes3,
@@ -553,8 +493,8 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         verifier.verify_and_send_batches(packet_batches).unwrap();
 
-        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 1);
-        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.received, 1);
+        assert_eq!(verifier.stats.received_malformed, 1);
 
         // Expect no messages since the packet was malformed
         expect_no_receive(&receiver);
@@ -571,13 +511,7 @@ mod tests {
             .verify_and_send_batches(messages_to_batches(&messages_no_stakes))
             .unwrap();
 
-        assert_eq!(
-            verifier
-                .stats
-                .received_no_epoch_stakes
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(verifier.stats.received_no_epoch_stakes, 1);
 
         // Expect no messages since the packet was malformed
         expect_no_receive(&receiver);
@@ -591,7 +525,7 @@ mod tests {
         verifier
             .verify_and_send_batches(messages_to_batches(&messages_invalid_rank))
             .unwrap();
-        assert_eq!(verifier.stats.received_bad_rank.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.received_bad_rank, 1);
 
         // Expect no messages since the packet was malformed
         expect_no_receive(&receiver);
@@ -676,9 +610,8 @@ mod tests {
         verifier.verify_and_send_batches(packet_batches).unwrap();
         expect_no_receive(&receiver);
         assert_eq!(verifier.stats.vote_stats.pool_sent, 0);
-        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 1);
-        assert_eq!(verifier.stats.received_discarded.load(Ordering::Relaxed), 1);
-        assert_eq!(verifier.stats.received_votes.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received, 1);
+        assert_eq!(verifier.stats.received_discarded, 1);
     }
 
     #[test]
@@ -894,7 +827,7 @@ mod tests {
 
         let packet_batches = vec![];
         verifier.verify_and_send_batches(packet_batches).unwrap();
-        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received, 0);
     }
 
     #[test]
@@ -965,13 +898,7 @@ mod tests {
             0,
             "This certificate should be invalid"
         );
-        assert_eq!(
-            verifier
-                .stats
-                .received_not_enough_stake
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(verifier.stats.cert_stats.stake_verification_failed, 1);
     }
 
     #[test]
@@ -1095,13 +1022,7 @@ mod tests {
             0,
             "This certificate should be invalid"
         );
-        assert_eq!(
-            verifier
-                .stats
-                .received_not_enough_stake
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(verifier.stats.cert_stats.stake_verification_failed, 1);
     }
 
     #[test]
@@ -1130,13 +1051,7 @@ mod tests {
 
         verifier.verify_and_send_batches(packet_batches).unwrap();
         expect_no_receive(&message_receiver);
-        assert_eq!(
-            verifier
-                .stats
-                .received_bad_signature_certs
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(verifier.stats.cert_stats.signature_verification_failed, 1);
     }
 
     #[test]
@@ -1198,13 +1113,7 @@ mod tests {
             "All valid messages in a mixed batch should be sent"
         );
         assert_eq!(verifier.stats.vote_stats.pool_sent, num_votes as u64);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_certs_consensus_sent
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(verifier.stats.cert_stats.pool_sent, 1);
     }
 
     #[test]
@@ -1227,7 +1136,7 @@ mod tests {
         let packet_batches = messages_to_batches(&[consensus_message]);
         verifier.verify_and_send_batches(packet_batches).unwrap();
         expect_no_receive(&message_receiver);
-        assert_eq!(verifier.stats.received_bad_rank.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.received_bad_rank, 1);
     }
 
     #[test]
@@ -1288,7 +1197,7 @@ mod tests {
             .verify_and_send_batches(packet_batches_vote)
             .unwrap();
         expect_no_receive(&message_receiver);
-        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 1);
+        assert_eq!(sig_verifier.stats.received_old, 1);
 
         let cert = create_signed_certificate_message(
             &validator_keypairs,
@@ -1302,7 +1211,7 @@ mod tests {
             .verify_and_send_batches(packet_batches_cert)
             .unwrap();
         expect_no_receive(&message_receiver);
-        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 2);
+        assert_eq!(sig_verifier.stats.received_old, 2);
     }
 
     #[test]
@@ -1342,7 +1251,7 @@ mod tests {
             1,
             "First certificate should be sent"
         );
-        assert_eq!(verifier.stats.received_verified.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received_verified, 0);
 
         vote_messages.pop(); // Remove one signature
         let mut builder2 = CertificateBuilder::new(cert_type);
@@ -1356,13 +1265,11 @@ mod tests {
         verifier.verify_and_send_batches(packet_batches2).unwrap();
         expect_no_receive(&message_receiver);
         assert_eq!(
-            verifier.stats.received.load(Ordering::Relaxed),
-            2,
+            verifier.stats.received, 2,
             "Should have received two packets in total"
         );
         assert_eq!(
-            verifier.stats.received_verified.load(Ordering::Relaxed),
-            1,
+            verifier.stats.received_verified, 1,
             "Should have detected one already-verified cert"
         );
     }
