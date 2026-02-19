@@ -29,7 +29,7 @@ pub struct BLSPubkeyStakeEntry {
 /// Container to store a mapping from validator [`BLSPubkey`] to rank.
 ///
 /// A validator with a smaller rank has a higher stake.
-/// Container also supports lookups from rank to [`(Pubkey, BLSPubkey)`].
+/// Container also supports lookups from rank to [`BLSPubkeyStakeEntry`].
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]

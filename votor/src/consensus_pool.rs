@@ -99,7 +99,7 @@ fn get_key_and_stakes(
     let stake = epoch_stakes.vote_account_stake(vote_key);
     if stake == 0 {
         // Since we have a valid rank, this should never happen, there is no rank for zero stake.
-        panic!("Validator stake is zero for pubkey: {vote_key}");
+        panic!("Validator stake is zero for pubkey: {}", entry.pubkey);
     }
     Ok((*vote_key, stake, epoch_stakes.total_stake()))
 }
