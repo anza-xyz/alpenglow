@@ -227,23 +227,27 @@ impl BLSSigVerifier {
                     self.cert_buffer.push(cert);
                 }
             }
+        }
 
-            // Filter already verified certifies
-            if !self.cert_buffer.is_empty() {
-                let verified_certs = self.verified_certs.read().unwrap();
-                let len_before = self.cert_buffer.len();
+        // Filter out certificates that have already been verified.
+        //
+        // Under normal network conditions, most incoming certificates are
+        // redundant because the node will have already generated them locally
+        // via the consensus pool.
+        if !self.cert_buffer.is_empty() {
+            let verified_certs = self.verified_certs.read().unwrap();
+            let len_before = self.cert_buffer.len();
 
-                // apply in-place filtering
-                self.cert_buffer
-                    .retain(|cert| !verified_certs.contains(&cert.cert_type));
+            // apply in-place filtering
+            self.cert_buffer
+                .retain(|cert| !verified_certs.contains(&cert.cert_type));
 
-                let len_after = self.cert_buffer.len();
-                let duplicates = len_before - len_after;
-                if duplicates > 0 {
-                    self.stats
-                        .received_verified
-                        .fetch_add(duplicates as u64, Ordering::Relaxed);
-                }
+            let len_after = self.cert_buffer.len();
+            let duplicates = len_before - len_after;
+            if duplicates > 0 {
+                self.stats
+                    .received_verified
+                    .fetch_add(duplicates as u64, Ordering::Relaxed);
             }
         }
     }
