@@ -40,7 +40,7 @@ use {
 };
 
 #[derive(Error, Debug)]
-pub(super) enum Error {
+enum Error {
     #[error("verifying votes failed with {0}")]
     VerifyVotes(#[from] VerifyVotesError),
     #[error("verifying certs failed with {0}")]
@@ -77,7 +77,7 @@ pub fn spawn_service(
         .unwrap()
 }
 
-pub struct BLSSigVerifier {
+struct BLSSigVerifier {
     channel_to_repair: VerifiedVoteSender,
     channel_to_reward: Sender<AddVoteMessage>,
     channel_to_pool: Sender<Vec<ConsensusMessage>>,
@@ -96,7 +96,7 @@ pub struct BLSSigVerifier {
 }
 
 impl BLSSigVerifier {
-    pub fn new(
+    fn new(
         sharable_banks: SharableBanks,
         channel_to_repair: VerifiedVoteSender,
         channel_to_reward: Sender<AddVoteMessage>,
@@ -122,7 +122,7 @@ impl BLSSigVerifier {
         }
     }
 
-    pub fn run(mut self, exit: Arc<AtomicBool>, packet_receiver: Receiver<PacketBatch>) {
+    fn run(mut self, exit: Arc<AtomicBool>, packet_receiver: Receiver<PacketBatch>) {
         let mut stats = PacketStats::default();
 
         while !exit.load(Ordering::Relaxed) {
@@ -157,7 +157,7 @@ impl BLSSigVerifier {
         }
     }
 
-    pub(super) fn verify_and_send_batches(
+    fn verify_and_send_batches(
         &mut self,
         batches: Vec<PacketBatch>,
     ) -> Result<(), Error> {
