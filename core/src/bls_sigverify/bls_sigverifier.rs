@@ -48,6 +48,7 @@ pub(super) enum Error {
     VerifyCerts(#[from] VerifyCertsError),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_service(
     exit: Arc<AtomicBool>,
     packet_receiver: Receiver<PacketBatch>,
