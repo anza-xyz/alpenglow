@@ -9411,6 +9411,7 @@ dependencies = [
  "agave-feature-set",
  "agave-logger",
  "agave-random",
+ "agave-votor-messages",
  "ahash 0.8.12",
  "assert_matches",
  "bencher",
