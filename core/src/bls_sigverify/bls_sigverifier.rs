@@ -157,10 +157,7 @@ impl BLSSigVerifier {
         }
     }
 
-    fn verify_and_send_batches(
-        &mut self,
-        batches: Vec<PacketBatch>,
-    ) -> Result<(), Error> {
+    fn verify_and_send_batches(&mut self, batches: Vec<PacketBatch>) -> Result<(), Error> {
         let mut preprocess_time = Measure::start("preprocess");
         let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
         let root_bank = self.sharable_banks.root();
