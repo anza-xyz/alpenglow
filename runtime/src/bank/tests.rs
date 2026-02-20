@@ -817,7 +817,7 @@ where
         - bank0.capitalization()
         - bank1_sysvar_delta()
         - bank2_sysvar_delta()
-        - VoteRewardAccountState::rent_needed_for_account(&bank2);
+        - EpochInflationAccountState::rent_needed_for_account(&bank2);
 
     // this assumes that no new builtins or precompiles were activated in bank1 or bank2
     let EpochInflationRewards {
