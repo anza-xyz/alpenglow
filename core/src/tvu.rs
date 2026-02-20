@@ -6,7 +6,7 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_trace::BankingTracer,
         block_creation_loop::ReplayHighestFrozen,
-        bls_sigverify::bls_sigverify_service::BLSSigVerifyService,
+        bls_sigverify::bls_sigverifier,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,
             VerifiedVoteSender, VoteTracker,
@@ -109,7 +109,7 @@ pub struct Tvu {
     warm_quic_cache_service: Option<WarmQuicCacheService>,
     drop_bank_service: DropBankService,
     duplicate_shred_listener: DuplicateShredListener,
-    alpenglow_sigverify_service: BLSSigVerifyService,
+    alpenglow_sigverify_t: thread::JoinHandle<()>,
     alpenglow_quic_t: thread::JoinHandle<()>,
     votor: Votor,
     commitment_service: AggregateCommitmentService,
@@ -320,7 +320,8 @@ impl Tvu {
 
         // At the moment there are roughly 1K validators and the sigverifier receives votes in batches and sends them to the consensus reward container in batches so hopefully using a channel of 2K slots would never block.
         let (reward_votes_sender, reward_votes_receiver) = bounded(2000);
-        let alpenglow_sigverify_service = BLSSigVerifyService::new(
+        let alpenglow_sigverify_t = bls_sigverifier::spawn_service(
+            exit.clone(),
             bls_packet_receiver,
             bank_forks.read().unwrap().sharable_banks(),
             verified_vote_sender.clone(),
@@ -634,7 +635,7 @@ impl Tvu {
             warm_quic_cache_service,
             drop_bank_service,
             duplicate_shred_listener,
-            alpenglow_sigverify_service,
+            alpenglow_sigverify_t,
             alpenglow_quic_t,
             votor,
             commitment_service,
@@ -661,7 +662,7 @@ impl Tvu {
         }
         self.drop_bank_service.join()?;
         self.duplicate_shred_listener.join()?;
-        self.alpenglow_sigverify_service.join()?;
+        self.alpenglow_sigverify_t.join()?;
         self.alpenglow_quic_t.join()?;
         self.votor.join()?;
         self.commitment_service.join()?;
