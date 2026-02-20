@@ -1,11 +1,11 @@
 use {
     super::*,
+    agave_votor::event::VotorEventSender,
     solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_gossip::contact_info::ContactInfo,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
-    solana_votor::event::VotorEventSender,
 };
 #[derive(Clone)]
 pub(super) struct BroadcastFakeShredsRun {

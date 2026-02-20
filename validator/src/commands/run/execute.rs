@@ -7,6 +7,7 @@ use {
         ledger_lockfile, lock_ledger,
     },
     agave_logger::redirect_stderr_to_file,
+    agave_votor::vote_history_storage,
     clap::{crate_name, value_t, value_t_or_exit, values_t, values_t_or_exit, ArgMatches},
     crossbeam_channel::unbounded,
     log::*,
@@ -67,7 +68,6 @@ use {
         xdp::{set_cpu_affinity, XdpConfig},
     },
     solana_validator_exit::Exit,
-    solana_votor::vote_history_storage,
     std::{
         collections::HashSet,
         fs::{self, File},

@@ -6,6 +6,8 @@ use {
         *,
     },
     crate::cluster_nodes::ClusterNodesCache,
+    agave_votor::event::VotorEventSender,
+    agave_votor_messages::migration::MigrationStatus,
     crossbeam_channel::Sender,
     solana_entry::block_component::BlockComponent,
     solana_hash::Hash,
@@ -17,8 +19,6 @@ use {
     solana_runtime::bank::Bank,
     solana_sha256_hasher::hashv,
     solana_time_utils::AtomicInterval,
-    solana_votor::event::VotorEventSender,
-    solana_votor_messages::migration::MigrationStatus,
     std::{borrow::Cow, sync::RwLock},
     tokio::sync::mpsc::Sender as AsyncSender,
 };

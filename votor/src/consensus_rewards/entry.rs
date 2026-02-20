@@ -1,13 +1,13 @@
 use {
     super::{BuildRewardCertsRespError, BuildRewardCertsRespSucc},
+    agave_votor_messages::{
+        consensus_message::VoteMessage, reward_certificate::SkipRewardCertificate, vote::Vote,
+    },
     notar_entry::NotarEntry,
     partial_cert::{BuildSigBitmapError, PartialCert},
     solana_bls_signatures::BlsError,
     solana_clock::Slot,
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
-    solana_votor_messages::{
-        consensus_message::VoteMessage, reward_certificate::SkipRewardCertificate, vote::Vote,
-    },
     thiserror::Error,
 };
 

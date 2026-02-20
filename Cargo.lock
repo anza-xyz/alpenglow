@@ -78,6 +78,8 @@ dependencies = [
 name = "agave-bls-cert-verify"
 version = "3.1.0"
 dependencies = [
+ "agave-votor",
+ "agave-votor-messages",
  "bitvec",
  "criterion",
  "rayon",
@@ -85,8 +87,6 @@ dependencies = [
  "solana-bls-signatures",
  "solana-hash",
  "solana-signer-store",
- "solana-votor",
- "solana-votor-messages",
  "thiserror 2.0.17",
  "wincode",
 ]
@@ -467,6 +467,7 @@ version = "3.1.0"
 dependencies = [
  "agave-geyser-plugin-interface",
  "agave-logger",
+ "agave-votor",
  "assert_cmd",
  "chrono",
  "clap 2.33.3",
@@ -543,7 +544,6 @@ dependencies = [
  "solana-validator-exit",
  "solana-version",
  "solana-vote-program",
- "solana-votor",
  "spl-generic-token",
  "spl-token-2022-interface",
  "symlink",
@@ -561,6 +561,99 @@ dependencies = [
  "assert_matches",
  "solana-perf",
  "solana-streamer",
+]
+
+[[package]]
+name = "agave-votor"
+version = "3.1.0"
+dependencies = [
+ "agave-logger",
+ "agave-votor",
+ "agave-votor-messages",
+ "anyhow",
+ "bincode",
+ "bitvec",
+ "bs58",
+ "crossbeam-channel",
+ "dashmap",
+ "etcd-client",
+ "itertools 0.12.1",
+ "log",
+ "lru",
+ "num-traits",
+ "parking_lot 0.12.3",
+ "qualifier_attr",
+ "rand 0.8.5",
+ "rayon",
+ "serde",
+ "serde_bytes",
+ "serde_derive",
+ "solana-account",
+ "solana-accounts-db",
+ "solana-bloom",
+ "solana-bls-signatures",
+ "solana-client",
+ "solana-clock",
+ "solana-connection-cache",
+ "solana-entry",
+ "solana-epoch-schedule",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-genesis-config",
+ "solana-gossip",
+ "solana-hash",
+ "solana-keypair",
+ "solana-ledger",
+ "solana-measure",
+ "solana-metrics",
+ "solana-net-utils",
+ "solana-perf",
+ "solana-pubkey",
+ "solana-rpc",
+ "solana-runtime",
+ "solana-sdk-ids",
+ "solana-signature",
+ "solana-signer",
+ "solana-signer-store",
+ "solana-streamer",
+ "solana-time-utils",
+ "solana-transaction",
+ "solana-transaction-error",
+ "solana-vote",
+ "solana-vote-program",
+ "test-case",
+ "thiserror 2.0.17",
+ "tokio-util 0.7.16",
+ "wincode",
+]
+
+[[package]]
+name = "agave-votor-messages"
+version = "3.1.0"
+dependencies = [
+ "agave-feature-set",
+ "agave-logger",
+ "agave-votor-messages",
+ "bincode",
+ "bitvec",
+ "bytemuck",
+ "log",
+ "num_enum",
+ "serde",
+ "solana-account",
+ "solana-bls-signatures",
+ "solana-clock",
+ "solana-epoch-schedule",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-hash",
+ "solana-keypair",
+ "solana-program",
+ "solana-signer-store",
+ "solana-vote-interface",
+ "spl-pod",
+ "thiserror 2.0.17",
+ "wincode",
 ]
 
 [[package]]
@@ -7684,6 +7777,7 @@ dependencies = [
  "agave-feature-set",
  "agave-logger",
  "agave-syscalls",
+ "agave-votor-messages",
  "assert_matches",
  "bincode",
  "bs58",
@@ -7768,7 +7862,6 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
- "solana-votor-messages",
  "spl-memo-interface",
  "tempfile",
  "test-case",
@@ -8098,6 +8191,8 @@ dependencies = [
  "agave-reserved-account-keys",
  "agave-transaction-view",
  "agave-verified-packet-receiver",
+ "agave-votor",
+ "agave-votor-messages",
  "ahash 0.8.11",
  "anyhow",
  "arrayvec",
@@ -8229,8 +8324,6 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
- "solana-votor",
- "solana-votor-messages",
  "solana-wen-restart",
  "spl-memo-interface",
  "static_assertions",
@@ -8449,6 +8542,7 @@ version = "3.1.0"
 dependencies = [
  "agave-logger",
  "agave-reserved-account-keys",
+ "agave-votor-messages",
  "assert_matches",
  "bincode",
  "crossbeam-channel",
@@ -8477,7 +8571,6 @@ dependencies = [
  "solana-system-transaction",
  "solana-transaction",
  "solana-transaction-error",
- "solana-votor-messages",
  "thiserror 2.0.17",
  "wincode",
 ]
@@ -8699,6 +8792,7 @@ version = "3.1.0"
 dependencies = [
  "agave-feature-set",
  "agave-logger",
+ "agave-votor-messages",
  "base64 0.22.1",
  "bincode",
  "clap 2.33.3",
@@ -8739,7 +8833,6 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
- "solana-votor-messages",
  "tempfile",
 ]
 
@@ -8999,6 +9092,7 @@ dependencies = [
 name = "solana-keygen"
 version = "3.1.0"
 dependencies = [
+ "agave-votor-messages",
  "bs58",
  "clap 3.2.23",
  "dirs-next",
@@ -9017,7 +9111,6 @@ dependencies = [
  "solana-signer",
  "solana-version",
  "solana-vote",
- "solana-votor-messages",
  "tempfile",
  "tiny-bip39",
 ]
@@ -9073,6 +9166,7 @@ dependencies = [
  "agave-feature-set",
  "agave-logger",
  "agave-reserved-account-keys",
+ "agave-votor-messages",
  "anyhow",
  "assert_matches",
  "bincode",
@@ -9161,7 +9255,6 @@ dependencies = [
  "solana-transaction-status",
  "solana-vote",
  "solana-vote-program",
- "solana-votor-messages",
  "spl-generic-token",
  "spl-pod",
  "static_assertions",
@@ -9253,6 +9346,8 @@ version = "3.1.0"
 dependencies = [
  "agave-feature-set",
  "agave-logger",
+ "agave-votor",
+ "agave-votor-messages",
  "assert_matches",
  "bincode",
  "crossbeam-channel",
@@ -9314,8 +9409,6 @@ dependencies = [
  "solana-vote",
  "solana-vote-interface",
  "solana-vote-program",
- "solana-votor",
- "solana-votor-messages",
  "static_assertions",
  "strum",
  "tempfile",
@@ -9520,6 +9613,7 @@ name = "solana-perf"
 version = "3.1.0"
 dependencies = [
  "agave-logger",
+ "agave-votor-messages",
  "ahash 0.8.11",
  "assert_matches",
  "bencher",
@@ -9558,7 +9652,6 @@ dependencies = [
  "solana-transaction",
  "solana-vote",
  "solana-vote-program",
- "solana-votor-messages",
  "test-case",
  "tikv-jemallocator",
 ]
@@ -9568,6 +9661,7 @@ name = "solana-poh"
 version = "3.1.0"
 dependencies = [
  "agave-logger",
+ "agave-votor-messages",
  "arc-swap",
  "assert_matches",
  "bincode",
@@ -9596,7 +9690,6 @@ dependencies = [
  "solana-time-utils",
  "solana-transaction",
  "solana-version",
- "solana-votor-messages",
  "thiserror 2.0.17",
  "tikv-jemallocator",
 ]
@@ -10298,6 +10391,7 @@ dependencies = [
  "agave-reserved-account-keys",
  "agave-syscalls",
  "agave-transaction-view",
+ "agave-votor-messages",
  "ahash 0.8.11",
  "aquamarine",
  "arc-swap",
@@ -10429,7 +10523,6 @@ dependencies = [
  "solana-vote",
  "solana-vote-interface",
  "solana-vote-program",
- "solana-votor-messages",
  "spl-generic-token",
  "static_assertions",
  "strum",
@@ -10449,6 +10542,7 @@ dependencies = [
  "agave-feature-set",
  "agave-reserved-account-keys",
  "agave-transaction-view",
+ "agave-votor-messages",
  "bincode",
  "criterion",
  "log",
@@ -10471,7 +10565,6 @@ dependencies = [
  "solana-transaction-error",
  "solana-vote",
  "solana-vote-interface",
- "solana-votor-messages",
  "thiserror 2.0.17",
 ]
 
@@ -10813,6 +10906,7 @@ name = "solana-stake-program"
 version = "3.1.0"
 dependencies = [
  "agave-feature-set",
+ "agave-votor-messages",
  "bincode",
  "log",
  "solana-account",
@@ -10828,7 +10922,6 @@ dependencies = [
  "solana-transaction-context",
  "solana-vote",
  "solana-vote-interface",
- "solana-votor-messages",
 ]
 
 [[package]]
@@ -11601,6 +11694,8 @@ version = "3.1.0"
 dependencies = [
  "agave-feature-set",
  "agave-logger",
+ "agave-votor",
+ "agave-votor-messages",
  "agave-xdp",
  "assert_matches",
  "bencher",
@@ -11651,8 +11746,6 @@ dependencies = [
  "solana-transaction",
  "solana-transaction-error",
  "solana-turbine",
- "solana-votor",
- "solana-votor-messages",
  "static_assertions",
  "test-case",
  "thiserror 2.0.17",
@@ -11808,6 +11901,7 @@ name = "solana-vote"
 version = "3.1.0"
 dependencies = [
  "agave-logger",
+ "agave-votor-messages",
  "arbitrary",
  "bencher",
  "bincode",
@@ -11845,7 +11939,6 @@ dependencies = [
  "solana-transaction",
  "solana-vote",
  "solana-vote-interface",
- "solana-votor-messages",
  "spl-pod",
  "static_assertions",
  "test-case",
@@ -11922,103 +12015,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-votor"
-version = "3.1.0"
-dependencies = [
- "agave-logger",
- "anyhow",
- "bincode",
- "bitvec",
- "bs58",
- "crossbeam-channel",
- "dashmap",
- "etcd-client",
- "itertools 0.12.1",
- "log",
- "lru",
- "num-traits",
- "parking_lot 0.12.3",
- "qualifier_attr",
- "rand 0.8.5",
- "rayon",
- "serde",
- "serde_bytes",
- "serde_derive",
- "solana-account",
- "solana-accounts-db",
- "solana-bloom",
- "solana-bls-signatures",
- "solana-client",
- "solana-clock",
- "solana-connection-cache",
- "solana-entry",
- "solana-epoch-schedule",
- "solana-frozen-abi",
- "solana-frozen-abi-macro",
- "solana-genesis-config",
- "solana-gossip",
- "solana-hash",
- "solana-keypair",
- "solana-ledger",
- "solana-measure",
- "solana-metrics",
- "solana-net-utils",
- "solana-perf",
- "solana-pubkey",
- "solana-rpc",
- "solana-runtime",
- "solana-sdk-ids",
- "solana-signature",
- "solana-signer",
- "solana-signer-store",
- "solana-streamer",
- "solana-time-utils",
- "solana-transaction",
- "solana-transaction-error",
- "solana-vote",
- "solana-vote-program",
- "solana-votor",
- "solana-votor-messages",
- "test-case",
- "thiserror 2.0.17",
- "tokio-util 0.7.16",
- "wincode",
-]
-
-[[package]]
-name = "solana-votor-messages"
-version = "3.1.0"
-dependencies = [
- "agave-feature-set",
- "agave-logger",
- "bincode",
- "bitvec",
- "bytemuck",
- "log",
- "num_enum",
- "serde",
- "solana-account",
- "solana-bls-signatures",
- "solana-clock",
- "solana-epoch-schedule",
- "solana-frozen-abi",
- "solana-frozen-abi-macro",
- "solana-hash",
- "solana-keypair",
- "solana-program",
- "solana-signer-store",
- "solana-vote-interface",
- "solana-votor-messages",
- "spl-pod",
- "thiserror 2.0.17",
- "wincode",
-]
-
-[[package]]
 name = "solana-wen-restart"
 version = "3.1.0"
 dependencies = [
  "agave-logger",
+ "agave-votor-messages",
  "anyhow",
  "assert_matches",
  "crossbeam-channel",
@@ -12047,7 +12048,6 @@ dependencies = [
  "solana-vote",
  "solana-vote-interface",
  "solana-vote-program",
- "solana-votor-messages",
  "tempfile",
 ]
 

@@ -1,9 +1,9 @@
 use {
+    agave_votor_messages::consensus_message::Block,
     crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
     solana_hash::Hash,
     solana_runtime::bank::Bank,
-    solana_votor_messages::consensus_message::Block,
     std::{sync::Arc, time::Instant},
 };
 

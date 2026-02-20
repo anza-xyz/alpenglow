@@ -48,6 +48,8 @@ agave-bls-cert-verify = { workspace = true }
 agave-feature-set = { workspace = true }
 agave-transaction-view = { workspace = true }
 agave-verified-packet-receiver = { workspace = true }
+agave-votor = { workspace = true }
+agave-votor-messages = { workspace = true }
 ahash = { workspace = true }
 anyhow = { workspace = true }
 arrayvec = { workspace = true }
@@ -169,8 +171,6 @@ solana-validator-exit = { workspace = true }
 solana-version = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
-solana-votor = { workspace = true }
-solana-votor-messages = { workspace = true }
 solana-wen-restart = { workspace = true }
 static_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }

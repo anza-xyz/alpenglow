@@ -32,6 +32,20 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
+    agave_votor::{
+        event::{
+            CompletedBlock, LeaderWindowInfo, SwitchBankEventReceiver, VotorEvent, VotorEventSender,
+        },
+        root_utils,
+        vote_history_storage::SavedVoteHistory,
+        voting_service::BLSOp,
+        voting_utils::{self, GenerateVoteTxResult},
+    },
+    agave_votor_messages::{
+        consensus_message::ConsensusMessage,
+        migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
+        vote::Vote,
+    },
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     itertools::Itertools,
     rayon::{
@@ -86,20 +100,6 @@ use {
     solana_time_utils::timestamp,
     solana_transaction::Transaction,
     solana_vote::vote_transaction::VoteTransaction,
-    solana_votor::{
-        event::{
-            CompletedBlock, LeaderWindowInfo, SwitchBankEventReceiver, VotorEvent, VotorEventSender,
-        },
-        root_utils,
-        vote_history_storage::SavedVoteHistory,
-        voting_service::BLSOp,
-        voting_utils::{self, GenerateVoteTxResult},
-    },
-    solana_votor_messages::{
-        consensus_message::ConsensusMessage,
-        migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
-        vote::Vote,
-    },
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -1523,7 +1523,7 @@ impl ReplayStage {
                     message: Arc::new(message),
                     slot,
                     saved_vote_history:
-                        solana_votor::vote_history_storage::SavedVoteHistoryVersions::Current(
+                        agave_votor::vote_history_storage::SavedVoteHistoryVersions::Current(
                             SavedVoteHistory::default(),
                         ),
                 });

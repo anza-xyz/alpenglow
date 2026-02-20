@@ -1,4 +1,8 @@
 use {
+    agave_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        vote::Vote,
+    },
     bitvec::vec::BitVec,
     rayon::{iter::IntoParallelRefIterator, join},
     solana_bls_signatures::{
@@ -6,10 +10,6 @@ use {
         Signature as BlsSignature, SignatureProjective, VerifiablePubkey,
     },
     solana_signer_store::{decode, DecodeError, Decoded},
-    solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType},
-        vote::Vote,
-    },
     thiserror::Error,
 };
 
@@ -218,13 +218,13 @@ pub fn collect_pubkeys(
 mod test {
     use {
         super::*,
+        agave_votor::consensus_pool::certificate_builder::CertificateBuilder,
+        agave_votor_messages::{consensus_message::VoteMessage, vote::Vote},
         solana_bls_signatures::{
             keypair::Keypair as BLSKeypair, signature::Signature as BLSSignature,
         },
         solana_hash::Hash,
         solana_signer_store::encode_base2,
-        solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
-        solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     };
 
     fn create_bls_keypairs(num_signers: usize) -> Vec<BLSKeypair> {

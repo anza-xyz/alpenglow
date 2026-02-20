@@ -18,6 +18,7 @@ use {
             },
         },
     },
+    agave_votor_messages::migration::MigrationStatus,
     bytes::Bytes,
     crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender},
     lru::LruCache,
@@ -40,7 +41,6 @@ use {
     },
     solana_streamer::sendmmsg::{batch_send, SendPktsError},
     solana_time_utils::timestamp,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
         iter::Iterator,

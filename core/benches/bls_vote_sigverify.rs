@@ -6,6 +6,7 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use {
+    agave_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion},
     solana_bls_signatures::{Keypair as BLSKeypair, Pubkey as BLSPubkey, VerifiablePubkey},
     solana_core::bls_sigverify::bls_vote_sigverify::{
@@ -15,7 +16,6 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_signer::Signer,
-    solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     std::sync::Arc,
 };
 

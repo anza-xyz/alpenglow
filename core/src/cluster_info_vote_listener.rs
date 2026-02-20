@@ -8,6 +8,7 @@ use {
         result::{Error, Result},
     },
     agave_banking_stage_ingress_types::BankingPacketBatch,
+    agave_votor_messages::migration::MigrationStatus,
     crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Select, Sender},
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
@@ -39,7 +40,6 @@ use {
         vote_parser::{self, ParsedVote},
         vote_transaction::VoteTransaction,
     },
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         cmp::max,
         collections::HashMap,
