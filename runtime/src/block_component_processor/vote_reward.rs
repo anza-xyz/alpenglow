@@ -310,8 +310,10 @@ fn pay_reward(
     accounts_to_store: &mut Vec<(Pubkey, AccountSharedData)>,
 ) {
     let data = account.account().data_clone();
-    // TODO (akhi): this is a stop gap till we upstream.  We want to use the `VoteStateHandler` API.
-    let mut vote_state: VoteStateV4 = bincode::deserialize(&data).unwrap();
+    // TODO (akhi): this is a stop gap till we upstream.
+    let Ok(mut vote_state) = bincode::deserialize(&data) else {
+        return;
+    };
     increment_credits(&mut vote_state, epoch, reward);
     accounts_to_store.push((
         pubkey,
