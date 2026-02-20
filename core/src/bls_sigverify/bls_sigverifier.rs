@@ -4,19 +4,23 @@ use {
     super::{
         bls_cert_sigverify::{verify_and_send_certificates, Error as VerifyCertsError},
         bls_vote_sigverify::{verify_and_send_votes, Error as VerifyVotesError, VoteToVerify},
-        stats::Stats,
+        stats::{PacketStats, Stats},
     },
     crate::cluster_info_vote_listener::VerifiedVoteSender,
-    crossbeam_channel::Sender,
+    crossbeam_channel::RecvTimeoutError,
+    crossbeam_channel::{Receiver, Sender},
     solana_bls_signatures::pubkey::Pubkey as BlsPubkey,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
-    solana_measure::measure::Measure,
+    solana_measure::{measure::Measure, measure_us},
     solana_pubkey::Pubkey,
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
-    solana_streamer::packet::PacketBatch,
+    solana_streamer::{
+        packet::PacketBatch,
+        streamer::{self, StreamerError},
+    },
     solana_votor::{
         consensus_metrics::ConsensusMetricsEventSender,
         consensus_rewards::{self},
@@ -27,7 +31,11 @@ use {
     },
     std::{
         collections::{HashMap, HashSet},
-        sync::Arc,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread::{self, Builder},
     },
     thiserror::Error,
 };
@@ -38,6 +46,35 @@ pub(super) enum Error {
     VerifyVotes(#[from] VerifyVotesError),
     #[error("verifying certs failed with {0}")]
     VerifyCerts(#[from] VerifyCertsError),
+}
+
+pub fn spawn_service(
+    exit: Arc<AtomicBool>,
+    packet_receiver: Receiver<PacketBatch>,
+    sharable_banks: SharableBanks,
+    channel_to_repair: VerifiedVoteSender,
+    channel_to_reward: Sender<AddVoteMessage>,
+    channel_to_pool: Sender<Vec<ConsensusMessage>>,
+    channel_to_metrics: ConsensusMetricsEventSender,
+    alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+    cluster_info: Arc<ClusterInfo>,
+    leader_schedule: Arc<LeaderScheduleCache>,
+) -> thread::JoinHandle<()> {
+    let verifier = BLSSigVerifier::new(
+        sharable_banks,
+        channel_to_repair,
+        channel_to_reward,
+        channel_to_pool,
+        channel_to_metrics,
+        alpenglow_last_voted,
+        cluster_info,
+        leader_schedule,
+    );
+
+    Builder::new()
+        .name("solSigVerBLS".to_string())
+        .spawn(move || verifier.run(exit, packet_receiver))
+        .unwrap()
 }
 
 pub struct BLSSigVerifier {
@@ -82,6 +119,41 @@ impl BLSSigVerifier {
             cluster_info,
             leader_schedule,
             votes_buffer: Vec::new(),
+        }
+    }
+
+    pub fn run(mut self, exit: Arc<AtomicBool>, packet_receiver: Receiver<PacketBatch>) {
+        let mut stats = PacketStats::default();
+
+        while !exit.load(Ordering::Relaxed) {
+            let (batches, num_packets, recv_duration) =
+                match streamer::recv_packet_batches(&packet_receiver) {
+                    Ok(res) => res,
+                    Err(e) => match e {
+                        StreamerError::RecvTimeout(RecvTimeoutError::Disconnected) => break,
+                        StreamerError::RecvTimeout(RecvTimeoutError::Timeout) => continue,
+                        _ => {
+                            error!("Error receiving packets: {e:?}");
+                            continue;
+                        }
+                    },
+                };
+
+            let batches_len = batches.len();
+            let (verify_res, verify_time_us) = measure_us!(self.verify_and_send_batches(batches));
+            stats.update(
+                num_packets as u64,
+                batches_len as u64,
+                recv_duration.as_micros() as u64,
+                verify_time_us,
+            );
+
+            if let Err(e) = verify_res {
+                error!("verify_and_send_batches() failed with {e}. Exiting.");
+                break;
+            }
+
+            stats.maybe_report();
         }
     }
 
