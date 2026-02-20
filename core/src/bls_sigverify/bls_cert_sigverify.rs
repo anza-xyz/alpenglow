@@ -1,10 +1,10 @@
 use {
+    super::{errors::SigVerifyCertError, stats::SigVerifyCertStats},
     agave_bls_cert_verify::cert_verify::Error as BlsCertVerifyError,
     crossbeam_channel::{unbounded, Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, ParallelIterator},
     solana_measure::measure::Measure,
     solana_runtime::bank::Bank,
-    solana_votor::welford_stats::WelfordStats,
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage},
         fraction::Fraction,
@@ -12,91 +12,6 @@ use {
     std::{collections::HashSet, num::NonZeroU64},
     thiserror::Error,
 };
-
-#[derive(Default)]
-pub(super) struct Stats {
-    /// Number of certs [`verify_and_send_certificates`] was requested to verify the signature of.
-    certs_to_sig_verify: u64,
-    /// Number of certs [`verify_and_send_certificates`] successfully verified the signature of.
-    sig_verified_certs: u64,
-
-    /// Number of times stake verification failed on a cert.
-    pub(super) stake_verification_failed: u64,
-    /// Number of times signature verification failed on a cert.
-    pub(super) signature_verification_failed: u64,
-
-    /// Number of votes sent successfully over the channel to consensus pool.
-    pub(super) pool_sent: u64,
-    /// Number of times the channel to consensus pool was full.
-    pub(super) pool_channel_full: u64,
-
-    /// Stats for [`verify_and_send_certificates`].
-    fn_verify_and_send_certs_stats: WelfordStats,
-}
-
-impl Stats {
-    pub(super) fn merge(&mut self, other: Stats) {
-        let Self {
-            certs_to_sig_verify,
-            sig_verified_certs,
-            stake_verification_failed,
-            signature_verification_failed,
-            pool_sent,
-            pool_channel_full,
-            fn_verify_and_send_certs_stats,
-        } = other;
-        self.certs_to_sig_verify += certs_to_sig_verify;
-        self.sig_verified_certs += sig_verified_certs;
-        self.stake_verification_failed += stake_verification_failed;
-        self.signature_verification_failed += signature_verification_failed;
-        self.pool_sent += pool_sent;
-        self.pool_channel_full += pool_channel_full;
-        self.fn_verify_and_send_certs_stats
-            .merge(fn_verify_and_send_certs_stats);
-    }
-
-    pub(super) fn report(&self) {
-        let Self {
-            certs_to_sig_verify,
-            sig_verified_certs,
-            stake_verification_failed,
-            signature_verification_failed,
-            pool_sent,
-            pool_channel_full,
-            fn_verify_and_send_certs_stats,
-        } = self;
-        datapoint_info!(
-            "bls_cert_sigverify_stats",
-            ("certs_to_sig_verify", *certs_to_sig_verify, i64),
-            ("sig_verified_certs", *sig_verified_certs, i64),
-            ("stake_verification_failed", *stake_verification_failed, i64),
-            (
-                "signature_verification_failed",
-                *signature_verification_failed,
-                i64
-            ),
-            ("pool_sent", *pool_sent, i64),
-            ("pool_channel_full", *pool_channel_full, i64),
-            (
-                "fn_verify_and_send_certs_count",
-                fn_verify_and_send_certs_stats.count(),
-                i64
-            ),
-            (
-                "fn_verify_and_send_certs_mean",
-                fn_verify_and_send_certs_stats.mean().unwrap_or(0),
-                i64
-            ),
-        );
-    }
-}
-
-#[derive(Debug, Error)]
-pub(super) enum Error {
-    #[error("channel to consensus pool disconnected")]
-    ConsensusPoolChannelDisconnected,
-}
-
 #[derive(Debug, Error)]
 enum CertVerifyError {
     #[error("Cert Verification Error {0}")]
@@ -120,12 +35,12 @@ pub(super) fn verify_and_send_certificates(
     certs: Vec<Certificate>,
     bank: &Bank,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
-) -> Result<Stats, Error> {
+) -> Result<SigVerifyCertStats, SigVerifyCertError> {
     for cert in certs.iter() {
         debug_assert!(!verified_certs_set.contains(&cert.cert_type));
     }
     let mut measure = Measure::start("verify_and_send_certificates");
-    let mut stats = Stats::default();
+    let mut stats = SigVerifyCertStats::default();
 
     if certs.is_empty() {
         return Ok(stats);
@@ -139,7 +54,8 @@ pub(super) fn verify_and_send_certificates(
     measure.stop();
     stats
         .fn_verify_and_send_certs_stats
-        .add_sample(measure.as_us());
+        .increment(measure.as_us())
+        .unwrap();
     Ok(stats)
 }
 
@@ -151,7 +67,7 @@ fn verify_certs(
     verified_certs_set: &mut HashSet<CertificateType>,
     certs: Vec<Certificate>,
     bank: &Bank,
-    stats: &mut Stats,
+    stats: &mut SigVerifyCertStats,
 ) -> Vec<ConsensusMessage> {
     // We want to verify the certs in parallel however collecting them and inserting them into the
     // set has to happen sequentially.  Following allows us to do that while minimising the number
@@ -191,8 +107,8 @@ fn verify_certs(
 fn send_certs_to_pool(
     messages: Vec<ConsensusMessage>,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
-    stats: &mut Stats,
-) -> Result<(), Error> {
+    stats: &mut SigVerifyCertStats,
+) -> Result<(), SigVerifyCertError> {
     if messages.is_empty() {
         return Ok(());
     }
@@ -206,7 +122,9 @@ fn send_certs_to_pool(
             stats.pool_channel_full += 1;
             Ok(())
         }
-        Err(TrySendError::Disconnected(_)) => Err(Error::ConsensusPoolChannelDisconnected),
+        Err(TrySendError::Disconnected(_)) => {
+            Err(SigVerifyCertError::ConsensusPoolChannelDisconnected)
+        }
     }
 }
 

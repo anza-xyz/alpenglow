@@ -8,9 +8,12 @@
 use {
     criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion},
     solana_bls_signatures::{Keypair as BLSKeypair, Pubkey as BLSPubkey, VerifiablePubkey},
-    solana_core::bls_sigverify::bls_vote_sigverify::{
-        aggregate_pubkeys_by_payload, aggregate_signatures, verify_individual_votes,
-        verify_votes_optimistic, Stats as VoteStats, VoteToVerify,
+    solana_core::bls_sigverify::{
+        bls_vote_sigverify::{
+            aggregate_pubkeys_by_payload, aggregate_signatures, verify_individual_votes,
+            verify_votes_optimistic, VoteToVerify,
+        },
+        stats::SigVerifyVoteStats,
     },
     solana_hash::Hash,
     solana_keypair::Keypair,
@@ -102,7 +105,7 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let mut stats = VoteStats::default();
+        let mut stats = SigVerifyVoteStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
@@ -119,7 +122,7 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let mut stats = VoteStats::default();
+        let mut stats = SigVerifyVoteStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
@@ -155,7 +158,7 @@ fn bench_verify_individual_votes(c: &mut Criterion) {
     for &batch_size in BATCH_SIZES {
         // Distinctness doesn't affect the cost of N individual verifications.
         let votes = generate_test_data(1, batch_size);
-        let mut stats = VoteStats::default();
+        let mut stats = SigVerifyVoteStats::default();
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
