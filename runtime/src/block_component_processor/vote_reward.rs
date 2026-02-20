@@ -59,7 +59,7 @@ impl VoteRewardAccountState {
                 let state = Self {
                     current_epoch: bank.epoch(),
                     current_epoch_state: epoch_state.clone(),
-                    prev_epoch: bank.epoch().checked_sub(1).unwrap(),
+                    prev_epoch: bank.epoch().saturating_sub(1),
                     prev_epoch_state: epoch_state,
                 };
                 state.set_state(bank);
