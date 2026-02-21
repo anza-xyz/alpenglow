@@ -1,9 +1,12 @@
 use {
     crate::bank::{Bank, EpochInflationRewards},
+    log::{error, info},
     solana_account::AccountSharedData,
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
     solana_system_interface::program as system_program,
+    solana_vote::vote_account::VoteAccount,
+    solana_vote_interface::state::{VoteStateV4, MAX_EPOCH_CREDITS_HISTORY},
     std::sync::LazyLock,
     thiserror::Error,
 };
@@ -18,16 +21,30 @@ static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
     pubkey
 });
 
-/// The state stored in the off curve account used to store metadata for calculating and paying
-/// voting rewards.
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub(crate) struct VoteRewardAccountState {
+/// The per epoch info stored in the off curve account.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct EpochInflationState {
     /// The rewards (in lamports) that would be paid to a validator whose stake is equal to the
-    /// capitalization and it voted in every slot in the epoch.  This is also the epoch inflation.
-    epoch_validator_rewards_lamports: u64,
+    /// capitalization and it voted in every slot in the epoch.  This is also the
+    /// epoch inflation.
+    max_possible_validator_reward: u64,
+    /// Number of slots in the epoch.
+    slots_per_epoch: u64,
+    /// The epoch number for this state.
+    epoch: Epoch,
 }
 
-impl VoteRewardAccountState {
+/// The state stored in the off curve account used to store metadata for calculating and paying
+/// voting rewards.
+///
+/// Info for the previous and the current epoch is stored.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct EpochInflationAccountState {
+    current: EpochInflationState,
+    prev: EpochInflationState,
+}
+
+impl EpochInflationAccountState {
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
     fn new_from_bank(bank: &Bank) -> Self {
         match bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR) {
@@ -35,9 +52,17 @@ impl VoteRewardAccountState {
                 // this can happen in the first epoch when the account has not been created yet.
                 // we create a dummy state to handle this case with the assumption that this code
                 // will become active in an epoch before the epoch in which Alpenglow is activated.
-                let state = Self {
-                    epoch_validator_rewards_lamports: 0,
+                let current = EpochInflationState {
+                    max_possible_validator_reward: 0,
+                    slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
+                    epoch: bank.epoch(),
                 };
+                let prev = EpochInflationState {
+                    max_possible_validator_reward: 0,
+                    slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
+                    epoch: bank.epoch().saturating_sub(1),
+                };
+                let state = Self { current, prev };
                 state.set_state(bank);
                 state
             }
@@ -76,6 +101,7 @@ impl VoteRewardAccountState {
         prev_epoch_capitalization: u64,
         additional_validator_rewards: u64,
     ) {
+        let prev_state = Self::new_from_bank(bank);
         let EpochInflationRewards {
             validator_rewards_lamports,
             epoch_duration_in_years: _,
@@ -85,17 +111,39 @@ impl VoteRewardAccountState {
             prev_epoch_capitalization + additional_validator_rewards,
             prev_epoch,
         );
-        let state = Self {
-            epoch_validator_rewards_lamports: validator_rewards_lamports,
+        let new_state = Self {
+            prev: prev_state.current,
+            current: EpochInflationState {
+                max_possible_validator_reward: validator_rewards_lamports,
+                slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
+                epoch: bank.epoch(),
+            },
         };
-        state.set_state(bank);
+        new_state.set_state(bank);
+    }
+
+    /// Returns the [`EpochState`] corresponding to the given `epoch`.
+    fn get_epoch_state(self, epoch: Epoch) -> Option<EpochInflationState> {
+        if self.current.epoch == epoch {
+            Some(self.current)
+        } else if self.prev.epoch == epoch {
+            Some(self.prev)
+        } else {
+            None
+        }
     }
 
     /// Returns the amount of lamports needed to store this account.
     #[cfg(test)]
     pub(crate) fn rent_needed_for_account(bank: &Bank) -> u64 {
+        let epoch_state = EpochInflationState {
+            max_possible_validator_reward: 0,
+            slots_per_epoch: 0,
+            epoch: 0,
+        };
         let state = Self {
-            epoch_validator_rewards_lamports: 0,
+            current: epoch_state.clone(),
+            prev: epoch_state,
         };
         let account_size = bincode::serialized_size(&state).unwrap();
         bank.rent_collector()
@@ -107,64 +155,134 @@ impl VoteRewardAccountState {
 /// Different types of errors that can happen when calculating and paying voting reward.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum PayVoteRewardError {
-    #[error("missing epoch stakes")]
-    MissingEpochStakes,
-    #[error("missing validator")]
-    MissingValidator,
+    #[error("missing epoch stakes for reward_slot {reward_slot} in current_slot {current_slot}")]
+    MissingEpochStakes {
+        reward_slot: Slot,
+        current_slot: Slot,
+    },
+    #[error("missing reward slot validator")]
+    MissingRewardSlotValidator {
+        pubkey: Pubkey,
+        reward_slot: Slot,
+        current_slot: Slot,
+    },
+    #[error(
+        "missing validator stake info for reward epoch {reward_epoch} in current_slot \
+         {current_slot}"
+    )]
+    NoEpochValidatorStake {
+        reward_epoch: Epoch,
+        current_slot: Slot,
+    },
 }
 
 /// Calculates and pays voting reward.
 ///
 /// This is a NOP if [`reward_slot_and_validators`] is [`None`].
 ///
-/// TODO: currently this function is just calculating rewards and not actually paying them.
+/// The reward slot is in the past relative to the current slot and hence might be in a different
+/// epoch than the current epoch and may have different validator sets and stakes, etc.
+/// This function must compute rewards using the stakes in the reward slot and pay them using the
+/// stakes in the current slot.
 pub(super) fn calculate_and_pay_voting_reward(
     bank: &Bank,
     reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
 ) -> Result<(), PayVoteRewardError> {
-    let Some((reward_slot, validators)) = reward_slot_and_validators else {
+    let Some((reward_slot, validators_to_reward)) = reward_slot_and_validators else {
         return Ok(());
     };
 
-    let (vote_accounts, total_stake_lamports) = {
-        let epoch_stakes = bank
-            .epoch_stakes_from_slot(reward_slot)
-            .ok_or(PayVoteRewardError::MissingEpochStakes)?;
+    let current_slot = bank.slot();
+    let (reward_slot_accounts, reward_slot_total_stake) = {
+        let epoch_stakes = bank.epoch_stakes_from_slot(reward_slot).ok_or(
+            PayVoteRewardError::MissingEpochStakes {
+                reward_slot,
+                current_slot,
+            },
+        )?;
         (
             epoch_stakes.stakes().vote_accounts().as_ref(),
             epoch_stakes.total_stake(),
         )
     };
-    let epoch_validator_rewards_lamports =
-        VoteRewardAccountState::new_from_bank(bank).epoch_validator_rewards_lamports;
 
-    let mut total_leader_reward_lamports = 0u64;
-    for validator in validators {
-        let (validator_stake_lamports, _) = vote_accounts
-            .get(&validator)
-            .ok_or(PayVoteRewardError::MissingValidator)?;
-        let reward_lamports = calculate_voting_reward(
-            bank.epoch_schedule().slots_per_epoch,
-            epoch_validator_rewards_lamports,
-            total_stake_lamports,
-            *validator_stake_lamports,
+    // This assumes that if the epoch_schedule ever changes, the new schedule will maintain correct
+    // info about older slots as well.
+    let reward_epoch = bank.epoch_schedule.get_epoch(reward_slot);
+    let epoch_state = EpochInflationAccountState::new_from_bank(bank)
+        .get_epoch_state(reward_epoch)
+        .ok_or(PayVoteRewardError::NoEpochValidatorStake {
+            reward_epoch,
+            current_slot,
+        })?;
+
+    let current_vote_accounts = bank.vote_accounts();
+    // Adding 1 to capacity on the off chance that the current leader was not in the aggregate.
+    let mut paid_vote_accounts = Vec::with_capacity(validators_to_reward.len().saturating_add(1));
+    let mut total_leader_reward = 0u64;
+    let current_slot_leader = *bank.collector_id();
+    let current_epoch = bank.epoch();
+    for validator_to_reward in validators_to_reward {
+        let (reward_slot_validator_stake, _) = reward_slot_accounts
+            .get(&validator_to_reward)
+            .ok_or(PayVoteRewardError::MissingRewardSlotValidator {
+                pubkey: validator_to_reward,
+                reward_slot,
+                current_slot,
+            })?;
+        let (validator_reward, add_leader_reward) = calculate_reward(
+            &epoch_state,
+            reward_slot_total_stake,
+            *reward_slot_validator_stake,
         );
-        // As per the Alpenglow SIMD, the rewards are split equally between the validators and the leader.
-        let validator_reward_lamports = reward_lamports / 2;
-        let leader_reward_lamports = reward_lamports - validator_reward_lamports;
-        total_leader_reward_lamports =
-            total_leader_reward_lamports.saturating_add(leader_reward_lamports);
+        total_leader_reward = total_leader_reward.saturating_add(add_leader_reward);
+
+        if validator_to_reward == current_slot_leader {
+            // current slot's leader.  We haven't finished calculating its reward yet.
+            // Will be paid at the end.
+            total_leader_reward = total_leader_reward.saturating_add(validator_reward);
+        } else {
+            let Some((_, current_slot_account)) = current_vote_accounts.get(&validator_to_reward)
+            else {
+                info!(
+                    "validator {validator_to_reward} was present for reward_slot {reward_slot} \
+                     but is absent for current_slot {current_slot}"
+                );
+                continue;
+            };
+            pay_reward(
+                current_epoch,
+                validator_to_reward,
+                current_slot_account,
+                validator_reward,
+                &mut paid_vote_accounts,
+            );
+        }
     }
+    match current_vote_accounts.get(&current_slot_leader) {
+        Some((_, leader_account)) => {
+            pay_reward(
+                current_epoch,
+                current_slot_leader,
+                leader_account,
+                total_leader_reward,
+                &mut paid_vote_accounts,
+            );
+        }
+        None => {
+            info!("Current slot {current_slot}'s leader's account {current_slot_leader} not found")
+        }
+    }
+    bank.store_accounts((current_slot, paid_vote_accounts.as_slice()));
     Ok(())
 }
 
 /// Computes the voting reward in Lamports.
-fn calculate_voting_reward(
-    slots_per_epoch: u64,
-    epoch_validator_rewards_lamports: u64,
+fn calculate_reward(
+    epoch_state: &EpochInflationState,
     total_stake_lamports: u64,
     validator_stake_lamports: u64,
-) -> u64 {
+) -> (u64, u64) {
     // Rewards are computed as following:
     // per_slot_inflation = epoch_validator_rewards_lamports / slots_per_epoch
     // fractional_stake = validator_stake / total_stake_lamports
@@ -172,17 +290,75 @@ fn calculate_voting_reward(
     //
     // The code below is equivalent but changes the order of operations to maintain precision
 
-    let numerator = epoch_validator_rewards_lamports as u128 * validator_stake_lamports as u128;
-    let denominator = slots_per_epoch as u128 * total_stake_lamports as u128;
+    let numerator =
+        epoch_state.max_possible_validator_reward as u128 * validator_stake_lamports as u128;
+    let denominator = epoch_state.slots_per_epoch as u128 * total_stake_lamports as u128;
 
     // SAFETY: the result should fit in u64 because we do not expect the inflation in a single
     // epoch to exceed u64::MAX.
-    (numerator / denominator).try_into().unwrap()
+    let reward_lamports: u64 = (numerator / denominator).try_into().unwrap();
+    // As per the Alpenglow SIMD, the rewards are split equally between the validators and the leader.
+    let validator_reward_lamports = reward_lamports / 2;
+    let leader_reward_lamports = reward_lamports - validator_reward_lamports;
+    (validator_reward_lamports, leader_reward_lamports)
+}
+
+fn pay_reward(
+    epoch: Epoch,
+    pubkey: Pubkey,
+    account: &VoteAccount,
+    reward: u64,
+    accounts_to_store: &mut Vec<(Pubkey, AccountSharedData)>,
+) {
+    let data = account.account().data_clone();
+    // TODO (akhi): this is a stop gap till we upstream.
+    let Ok(mut vote_state) = bincode::deserialize(&data) else {
+        return;
+    };
+    increment_credits(&mut vote_state, epoch, reward);
+    accounts_to_store.push((
+        pubkey,
+        AccountSharedData::new_data(account.lamports(), &vote_state, account.owner()).unwrap(),
+    ));
+}
+
+// TODO (akhi): this is a stop gap till we upstream.  We want to use the `VoteStateHandler` API.
+fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
+    // never seen a credit
+    if vote_state.epoch_credits.is_empty() {
+        vote_state.epoch_credits.push((epoch, 0, 0));
+    } else if epoch != vote_state.epoch_credits.last().unwrap().0 {
+        let (_, credits, prev_credits) = *vote_state.epoch_credits.last().unwrap();
+
+        if credits != prev_credits {
+            // if credits were earned previous epoch
+            // append entry at end of list for the new epoch
+            vote_state.epoch_credits.push((epoch, credits, credits));
+        } else {
+            // else just move the current epoch
+            vote_state.epoch_credits.last_mut().unwrap().0 = epoch;
+        }
+
+        // Remove too old epoch_credits
+        if vote_state.epoch_credits.len() > MAX_EPOCH_CREDITS_HISTORY {
+            vote_state.epoch_credits.remove(0);
+        }
+    }
+
+    vote_state.epoch_credits.last_mut().unwrap().1 = vote_state
+        .epoch_credits
+        .last()
+        .unwrap()
+        .1
+        .saturating_add(credits);
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, solana_genesis_config::GenesisConfig, solana_native_token::LAMPORTS_PER_SOL};
+    use {
+        super::*, solana_genesis_config::GenesisConfig, solana_native_token::LAMPORTS_PER_SOL,
+        std::sync::Arc,
+    };
 
     #[test]
     fn calculate_voting_reward_does_not_panic() {
@@ -196,40 +372,52 @@ mod tests {
             ..
         } = bank.calculate_epoch_inflation_rewards(circulating_supply, 1);
 
-        calculate_voting_reward(
-            bank.epoch_schedule().slots_per_epoch,
-            validator_rewards_lamports,
-            circulating_supply,
-            circulating_supply,
-        );
+        let epoch_state = EpochInflationState {
+            slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
+            max_possible_validator_reward: validator_rewards_lamports,
+            epoch: 1234,
+        };
+
+        calculate_reward(&epoch_state, circulating_supply, circulating_supply);
     }
 
     #[test]
     fn serialization_works() {
         let bank = Bank::new_for_tests(&GenesisConfig::default());
-        let state = VoteRewardAccountState {
-            epoch_validator_rewards_lamports: 1234,
+        let state = EpochInflationAccountState {
+            prev: EpochInflationState {
+                max_possible_validator_reward: 23432,
+                slots_per_epoch: 2532,
+                epoch: 321,
+            },
+            current: EpochInflationState {
+                max_possible_validator_reward: 76463,
+                slots_per_epoch: 2346,
+                epoch: 2345,
+            },
         };
         state.set_state(&bank);
-        let deserialized = VoteRewardAccountState::new_from_bank(&bank);
+        let deserialized = EpochInflationAccountState::new_from_bank(&bank);
         assert_eq!(state, deserialized);
     }
 
     #[test]
     fn epoch_update_works() {
         let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let first_slot_in_epoch_1 = bank.epoch_schedule().get_first_slot_in_epoch(1);
+        let bank =
+            Bank::new_from_parent(Arc::new(bank), &Pubkey::new_unique(), first_slot_in_epoch_1);
         let prev_epoch = 1;
         let prev_epoch_capitalization = 12345;
         let additional_validator_rewards = 6789;
-        VoteRewardAccountState::new_epoch_update_account(
+        EpochInflationAccountState::new_epoch_update_account(
             &bank,
             prev_epoch,
             prev_epoch_capitalization,
             additional_validator_rewards,
         );
-        let VoteRewardAccountState {
-            epoch_validator_rewards_lamports,
-        } = VoteRewardAccountState::new_from_bank(&bank);
+        let EpochInflationAccountState { current, .. } =
+            EpochInflationAccountState::new_from_bank(&bank);
         let EpochInflationRewards {
             validator_rewards_lamports,
             ..
@@ -237,6 +425,9 @@ mod tests {
             prev_epoch_capitalization + additional_validator_rewards,
             prev_epoch,
         );
-        assert_eq!(epoch_validator_rewards_lamports, validator_rewards_lamports);
+        assert_eq!(
+            current.max_possible_validator_reward,
+            validator_rewards_lamports
+        );
     }
 }

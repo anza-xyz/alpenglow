@@ -817,7 +817,7 @@ where
         - bank0.capitalization()
         - bank1_sysvar_delta()
         - bank2_sysvar_delta()
-        - VoteRewardAccountState::rent_needed_for_account(&bank2);
+        - EpochInflationAccountState::rent_needed_for_account(&bank2);
 
     // this assumes that no new builtins or precompiles were activated in bank1 or bank2
     let EpochInflationRewards {
@@ -5366,14 +5366,14 @@ fn test_bank_hash_consistency() {
             assert_eq!(bank.epoch(), 1);
             assert_eq!(
                 bank.hash().to_string(),
-                "GAcpLy2beH4eyygZaprWWzn4geSCd3xvLvnn2tudvhy1"
+                "CmvUJPHy3ujtwFvwD4xof9Yy2RbpBJnNNDUtKVdzvDvh"
             );
         }
         if bank.slot == 128 {
             assert_eq!(bank.epoch(), 2);
             assert_eq!(
                 bank.hash().to_string(),
-                "EKG6nQZnUHiv56HpYfxGSkXpn2uo8ea9bJfR6uYvKBR1"
+                "HC4JSzotUJZKFcnmfURaWu3fdqXt3yRPovU6yo4e21Jm"
             );
             break;
         }
