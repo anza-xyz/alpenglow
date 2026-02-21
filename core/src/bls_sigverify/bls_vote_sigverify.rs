@@ -3,6 +3,15 @@ use qualifier_attr::qualifiers;
 use {
     super::{errors::SigVerifyVoteError, stats::SigVerifyVoteStats},
     crate::cluster_info_vote_listener::VerifiedVoteSender,
+    agave_votor::{
+        consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
+        consensus_rewards,
+    },
+    agave_votor_messages::{
+        consensus_message::{ConsensusMessage, VoteMessage},
+        reward_certificate::AddVoteMessage,
+        vote::Vote,
+    },
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     solana_bls_signatures::{
@@ -16,15 +25,6 @@ use {
     solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_votor::{
-        consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
-        consensus_rewards,
-    },
-    solana_votor_messages::{
-        consensus_message::{ConsensusMessage, VoteMessage},
-        reward_certificate::AddVoteMessage,
-        vote::Vote,
-    },
     std::{collections::HashMap, time::Instant},
 };
 

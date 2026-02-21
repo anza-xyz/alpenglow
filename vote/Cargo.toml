@@ -21,6 +21,7 @@ dev-context-only-utils = ["dep:rand", "dep:bincode"]
 frozen-abi = ["dep:solana-frozen-abi", "dep:solana-frozen-abi-macro"]
 
 [dependencies]
+agave-votor-messages = { workspace = true }
 bincode = { workspace = true, optional = true }
 bitvec = { workspace = true }
 bytemuck = { workspace = true }
@@ -56,7 +57,6 @@ solana-svm-transaction = { workspace = true }
 solana-system-interface = { workspace = true }
 solana-transaction = { workspace = true, features = ["bincode"] }
 solana-vote-interface = { workspace = true, features = ["bincode"] }
-solana-votor-messages = { workspace = true }
 spl-pod = { workspace = true }
 thiserror = { workspace = true }
 

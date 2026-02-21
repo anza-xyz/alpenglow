@@ -16,6 +16,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 [dependencies]
 agave-geyser-plugin-interface = { workspace = true }
 agave-logger = { workspace = true }
+agave-votor = { workspace = true }
 chrono = { workspace = true, features = ["default", "serde"] }
 clap = { workspace = true }
 console = { workspace = true }
@@ -84,7 +85,6 @@ solana-unified-scheduler-pool = { workspace = true }
 solana-validator-exit = { workspace = true }
 solana-version = { workspace = true }
 solana-vote-program = { workspace = true }
-solana-votor = { workspace = true }
 symlink = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

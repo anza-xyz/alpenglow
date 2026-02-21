@@ -1,5 +1,5 @@
 use {
-    solana_votor_messages::{fraction::Fraction, vote::VoteType},
+    agave_votor_messages::{fraction::Fraction, vote::VoteType},
     std::time::Duration,
 };
 

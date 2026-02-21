@@ -8,9 +8,9 @@ use {
         consensus_pool::stats::ConsensusPoolStats,
         event::VotorEvent,
     },
+    agave_votor_messages::{consensus_message::Block, fraction::Fraction, vote::Vote},
     solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
     solana_hash::Hash,
-    solana_votor_messages::{consensus_message::Block, fraction::Fraction, vote::Vote},
     std::{collections::BTreeMap, num::NonZeroU64},
 };
 
@@ -156,7 +156,7 @@ impl SlotStakeCounters {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, solana_votor_messages::vote::Vote};
+    use {super::*, agave_votor_messages::vote::Vote};
 
     #[test]
     fn test_safe_to_notar_first_in_leader_window() {

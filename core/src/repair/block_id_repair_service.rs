@@ -22,6 +22,8 @@ use {
             BlockIdRepairResponse, BlockIdRepairType, RepairProtocol, RepairRequestProtocol,
         },
     },
+    agave_votor::event::{RepairEvent, RepairEventReceiver},
+    agave_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     crossbeam_channel::{select, unbounded},
     log::{debug, info},
     lru::LruCache,
@@ -43,8 +45,6 @@ use {
         streamer::{self, PacketBatchReceiver, StreamerReceiveStats},
     },
     solana_time_utils::timestamp,
-    solana_votor::event::{RepairEvent, RepairEventReceiver},
-    solana_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     stats::{BlockIdRepairRequestsStats, BlockIdRepairResponsesStats},
     std::{
         collections::{BinaryHeap, HashMap, HashSet},

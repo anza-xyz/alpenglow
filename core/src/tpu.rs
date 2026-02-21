@@ -22,6 +22,8 @@ use {
         validator::{BlockProductionMethod, GeneratorConfig, TransactionStructure},
         vortexor_receiver_adapter::VortexorReceiverAdapter,
     },
+    agave_votor::event::VotorEventSender,
+    agave_votor_messages::migration::MigrationStatus,
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver},
     solana_clock::Slot,
@@ -54,8 +56,6 @@ use {
         broadcast_stage::{BroadcastStage, BroadcastStageType},
         xdp::XdpSender,
     },
-    solana_votor::event::VotorEventSender,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},

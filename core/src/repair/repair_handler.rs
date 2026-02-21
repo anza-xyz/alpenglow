@@ -8,6 +8,7 @@ use {
         repair_response,
         serve_repair::{AncestorHashesResponse, BlockIdRepairResponse, MAX_ANCESTOR_RESPONSES},
     },
+    agave_votor_messages::migration::MigrationStatus,
     bincode::serialize,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
@@ -22,7 +23,6 @@ use {
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, PinnedPacketBatch},
     solana_pubkey::Pubkey,
     solana_runtime::bank_forks::SharableBanks,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashSet,
         net::SocketAddr,

@@ -1,14 +1,14 @@
 use {
     super::{errors::SigVerifyCertError, stats::SigVerifyCertStats},
     agave_bls_cert_verify::cert_verify::Error as BlsCertVerifyError,
+    agave_votor_messages::{
+        consensus_message::{Certificate, CertificateType, ConsensusMessage},
+        fraction::Fraction,
+    },
     crossbeam_channel::{unbounded, Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, ParallelIterator},
     solana_measure::measure::Measure,
     solana_runtime::bank::Bank,
-    solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType, ConsensusMessage},
-        fraction::Fraction,
-    },
     std::{collections::HashSet, num::NonZeroU64},
     thiserror::Error,
 };

@@ -1,8 +1,8 @@
 use {
+    agave_votor_messages::consensus_message::{Certificate, CertificateType, VoteMessage},
     bitvec::prelude::*,
     solana_bls_signatures::{BlsError, SignatureProjective},
     solana_signer_store::{encode_base2, encode_base3, EncodeError},
-    solana_votor_messages::consensus_message::{Certificate, CertificateType, VoteMessage},
     thiserror::Error,
 };
 
@@ -307,16 +307,16 @@ impl CertificateBuilder {
 mod tests {
     use {
         super::*,
+        agave_votor_messages::{
+            consensus_message::{CertificateType, VoteMessage},
+            vote::Vote,
+        },
         solana_bls_signatures::{
             Keypair as BLSKeypair, PubkeyProjective as BLSPubkeyProjective,
             Signature as BLSSignature, SignatureProjective, VerifiablePubkey,
         },
         solana_hash::Hash,
         solana_signer_store::{decode, Decoded},
-        solana_votor_messages::{
-            consensus_message::{CertificateType, VoteMessage},
-            vote::Vote,
-        },
     };
 
     #[test]
