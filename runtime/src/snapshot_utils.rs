@@ -789,6 +789,7 @@ pub fn serialize_and_archive_snapshot_package(
         bank_fields_to_serialize,
         bank_hash_stats,
         write_version,
+        block_id,
         enqueued: _,
     } = snapshot_package;
 
@@ -800,6 +801,7 @@ pub fn serialize_and_archive_snapshot_package(
         bank_fields_to_serialize,
         bank_hash_stats,
         write_version,
+        block_id,
         should_flush_and_hard_link_storages,
     )?;
 
@@ -860,6 +862,7 @@ fn serialize_snapshot(
     mut bank_fields: BankFieldsToSerialize,
     bank_hash_stats: BankHashStats,
     write_version: u64,
+    block_id: Option<Hash>,
     should_flush_and_hard_link_storages: bool,
 ) -> Result<BankSnapshotInfo> {
     let slot = bank_fields.slot;
@@ -915,6 +918,7 @@ fn serialize_snapshot(
                 obsolete_epoch_accounts_hash: None,
                 versioned_epoch_stakes,
                 accounts_lt_hash: Some(bank_fields.accounts_lt_hash.clone().into()),
+                block_id,
             };
             serde_snapshot::serialize_bank_snapshot_into(
                 stream,

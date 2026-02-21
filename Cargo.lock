@@ -265,6 +265,7 @@ dependencies = [
  "solana-runtime-transaction",
  "solana-sbpf",
  "solana-sdk-ids",
+ "solana-sha256-hasher",
  "solana-shred-version",
  "solana-signature",
  "solana-stake-interface",
