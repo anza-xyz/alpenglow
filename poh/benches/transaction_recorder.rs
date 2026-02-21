@@ -1,4 +1,5 @@
 use {
+    agave_votor_messages::migration::MigrationStatus,
     criterion::{criterion_group, criterion_main, Criterion},
     crossbeam_channel::{self, bounded},
     solana_hash::Hash,
@@ -18,7 +19,6 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, installed_scheduler_pool::BankWithScheduler},
     solana_transaction::versioned::VersionedTransaction,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{atomic::AtomicBool, Arc, RwLock},
         time::{Duration, Instant},

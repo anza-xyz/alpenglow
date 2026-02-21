@@ -19,6 +19,7 @@ use {
             result::{Error, RepairVerifyError, Result},
         },
     },
+    agave_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     bincode::{serialize, Options},
     bytes::Bytes,
     crossbeam_channel::{Receiver, RecvTimeoutError},
@@ -63,7 +64,6 @@ use {
         streamer::PacketBatchSender,
     },
     solana_time_utils::timestamp,
-    solana_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     std::{
         cmp::Reverse,
         collections::{HashMap, HashSet},

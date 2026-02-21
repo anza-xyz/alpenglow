@@ -13,14 +13,7 @@ use {
         },
         event::VotorEvent,
     },
-    certificate_builder::{BuildError as CertificateBuildError, CertificateBuilder},
-    log::{error, trace},
-    solana_clock::{Epoch, Slot},
-    solana_gossip::cluster_info::ClusterInfo,
-    solana_hash::Hash,
-    solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, validated_block_finalization::ValidatedBlockFinalizationCert},
-    solana_votor_messages::{
+    agave_votor_messages::{
         consensus_message::{
             vote_to_cert_types, Block, Certificate, CertificateType, ConsensusMessage, VoteMessage,
         },
@@ -28,6 +21,13 @@ use {
         migration::MigrationStatus,
         vote::{Vote, VoteType},
     },
+    certificate_builder::{BuildError as CertificateBuildError, CertificateBuilder},
+    log::{error, trace},
+    solana_clock::{Epoch, Slot},
+    solana_gossip::cluster_info::ClusterInfo,
+    solana_hash::Hash,
+    solana_pubkey::Pubkey,
+    solana_runtime::{bank::Bank, validated_block_finalization::ValidatedBlockFinalizationCert},
     std::{cmp::Ordering, collections::BTreeMap, num::NonZeroU64, sync::Arc},
     thiserror::Error,
 };
@@ -699,6 +699,7 @@ impl ConsensusPool {
 mod tests {
     use {
         super::*,
+        agave_votor_messages::consensus_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         solana_bls_signatures::{
             keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey, Signature as BLSSignature,
             VerifiableSignature,
@@ -716,7 +717,6 @@ mod tests {
         },
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
-        solana_votor_messages::consensus_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         std::sync::{Arc, RwLock},
         test_case::test_case,
     };

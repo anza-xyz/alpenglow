@@ -16,6 +16,7 @@ use {
         replay_stage::DUPLICATE_THRESHOLD,
         shred_fetch_stage::receive_quic_datagrams,
     },
+    agave_votor_messages::migration::MigrationStatus,
     bytes::Bytes,
     crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
     dashmap::{mapref::entry::Entry::Occupied, DashMap},
@@ -32,7 +33,6 @@ use {
     solana_runtime::bank::Bank,
     solana_streamer::streamer::{self, PacketBatchReceiver, StreamerReceiveStats},
     solana_time_utils::timestamp,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashSet,
         io::{Cursor, Read},

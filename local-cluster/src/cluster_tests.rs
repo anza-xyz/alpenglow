@@ -5,6 +5,7 @@
 use log::*;
 use {
     crate::{cluster::QuicTpuClient, local_cluster::LocalCluster},
+    agave_votor_messages::consensus_message::ConsensusMessage,
     rand::{thread_rng, Rng},
     rayon::{prelude::*, ThreadPool},
     solana_client::connection_cache::ConnectionCache,
@@ -42,7 +43,6 @@ use {
     solana_validator_exit::Exit,
     solana_vote::vote_transaction::{self, VoteTransaction},
     solana_vote_program::vote_state::TowerSync,
-    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::{HashMap, HashSet, VecDeque},
         net::{SocketAddr, TcpListener, UdpSocket},

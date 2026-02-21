@@ -1,13 +1,13 @@
 use {
     crate::bank::Bank,
     agave_bls_cert_verify::cert_verify::{verify_base2, Error as BlsCertVerifyError},
-    solana_bls_signatures::BlsError,
-    solana_clock::Slot,
-    solana_pubkey::Pubkey,
-    solana_votor_messages::{
+    agave_votor_messages::{
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, NUM_SLOTS_FOR_REWARD},
         vote::Vote,
     },
+    solana_bls_signatures::BlsError,
+    solana_clock::Slot,
+    solana_pubkey::Pubkey,
     thiserror::Error,
 };
 
@@ -145,6 +145,7 @@ mod tests {
         crate::genesis_utils::{
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
+        agave_votor_messages::consensus_message::VoteMessage,
         bitvec::vec::BitVec,
         solana_bls_signatures::{
             Keypair as BlsKeypair, Pubkey as BLSPubkey, Signature as BLSSignature,
@@ -152,7 +153,6 @@ mod tests {
         },
         solana_hash::Hash,
         solana_signer_store::encode_base2,
-        solana_votor_messages::consensus_message::VoteMessage,
         std::{collections::HashMap, sync::Arc},
     };
 

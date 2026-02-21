@@ -6,6 +6,8 @@ use {
         cluster_nodes::{self, ClusterNodes, ClusterNodesCache, Error, MAX_NUM_TURBINE_HOPS},
         xdp::XdpSender,
     },
+    agave_votor::event::VotorEvent,
+    agave_votor_messages::migration::MigrationStatus,
     bytes::Bytes,
     crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError},
     lru::LruCache,
@@ -34,8 +36,6 @@ use {
         socket::SocketAddrSpace,
     },
     solana_time_utils::timestamp,
-    solana_votor::event::VotorEvent,
-    solana_votor_messages::migration::MigrationStatus,
     static_assertions::const_assert_eq,
     std::{
         borrow::Cow,

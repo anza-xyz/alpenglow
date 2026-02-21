@@ -1,5 +1,10 @@
 use {
     agave_bls_cert_verify::cert_verify::{aggregate_pubkeys, collect_pubkeys, verify_certificate},
+    agave_votor::consensus_pool::certificate_builder::CertificateBuilder,
+    agave_votor_messages::{
+        consensus_message::{Certificate, CertificateType, VoteMessage},
+        vote::Vote,
+    },
     bitvec::vec::BitVec,
     criterion::{criterion_group, criterion_main, BenchmarkId, Criterion},
     solana_bls_signatures::{
@@ -7,11 +12,6 @@ use {
         signature::Signature as BlsSignature,
     },
     solana_hash::Hash,
-    solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
-    solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType, VoteMessage},
-        vote::Vote,
-    },
 };
 
 // Creates random BLS keypairs for bench tests

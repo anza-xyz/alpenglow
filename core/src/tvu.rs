@@ -28,6 +28,15 @@ use {
         warm_quic_cache_service::WarmQuicCacheService,
         window_service::{WindowService, WindowServiceChannels},
     },
+    agave_votor::{
+        consensus_metrics::MAX_IN_FLIGHT_CONSENSUS_EVENTS,
+        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
+        vote_history::VoteHistory,
+        vote_history_storage::VoteHistoryStorage,
+        voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
+        votor::{Votor, VotorConfig},
+    },
+    agave_votor_messages::reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
     solana_client::connection_cache::ConnectionCache,
@@ -66,17 +75,6 @@ use {
         streamer::StakedNodes,
     },
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
-    solana_votor::{
-        consensus_metrics::MAX_IN_FLIGHT_CONSENSUS_EVENTS,
-        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
-        vote_history::VoteHistory,
-        vote_history_storage::VoteHistoryStorage,
-        voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
-        votor::{Votor, VotorConfig},
-    },
-    solana_votor_messages::reward_certificate::{
-        BuildRewardCertsRequest, BuildRewardCertsResponse,
-    },
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -699,6 +697,7 @@ pub mod tests {
             consensus::tower_storage::FileTowerStorage,
             repair::quic_endpoint::RepairQuicAsyncSenders,
         },
+        agave_votor::vote_history_storage::FileVoteHistoryStorage,
         serial_test::serial,
         solana_gossip::{cluster_info::ClusterInfo, node::Node},
         solana_keypair::Keypair,
@@ -714,7 +713,6 @@ pub mod tests {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
-        solana_votor::vote_history_storage::FileVoteHistoryStorage,
         std::sync::atomic::{AtomicU64, Ordering},
     };
 

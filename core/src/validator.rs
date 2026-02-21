@@ -31,6 +31,11 @@ use {
         tpu::{ForwardingClientOption, Tpu, TpuSockets},
         tvu::{AlpenglowInitializationState, Tvu, TvuConfig, TvuSockets},
     },
+    agave_votor::{
+        vote_history::{VoteHistory, VoteHistoryError},
+        vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
+        voting_service::VotingServiceOverride,
+    },
     anyhow::{anyhow, Context, Result},
     crossbeam_channel::{bounded, unbounded, Receiver},
     quinn::Endpoint,
@@ -143,11 +148,6 @@ use {
     solana_unified_scheduler_pool::DefaultSchedulerPool,
     solana_validator_exit::Exit,
     solana_vote_program::vote_state,
-    solana_votor::{
-        vote_history::{VoteHistory, VoteHistoryError},
-        vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
-        voting_service::VotingServiceOverride,
-    },
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -2270,7 +2270,7 @@ fn post_process_restored_tower(
 }
 
 fn post_process_restored_vote_history(
-    restored_vote_history: solana_votor::vote_history_storage::Result<VoteHistory>,
+    restored_vote_history: agave_votor::vote_history_storage::Result<VoteHistory>,
     validator_identity: &Pubkey,
     config: &ValidatorConfig,
     bank_forks: &BankForks,

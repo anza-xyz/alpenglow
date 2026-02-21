@@ -20,6 +20,7 @@ use {
         tower_vote_state::TowerVoteState,
     },
     crate::replay_stage::DUPLICATE_THRESHOLD,
+    agave_votor_messages::{fraction::Fraction, migration::GENESIS_VOTE_THRESHOLD},
     chrono::prelude::*,
     solana_clock::{Slot, UnixTimestamp},
     solana_hash::Hash,
@@ -41,7 +42,6 @@ use {
             MAX_LOCKOUT_HISTORY,
         },
     },
-    solana_votor_messages::{fraction::Fraction, migration::GENESIS_VOTE_THRESHOLD},
     std::{
         cmp::Ordering,
         collections::{HashMap, HashSet},

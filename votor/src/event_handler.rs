@@ -17,6 +17,7 @@ use {
         voting_utils::{generate_vote_message, VoteError, VotingContext},
         votor::SharedContext,
     },
+    agave_votor_messages::{consensus_message::Block, migration::MigrationStatus, vote::Vote},
     crossbeam_channel::{select, RecvError, SendError, TrySendError},
     parking_lot::RwLock,
     solana_clock::Slot,
@@ -28,7 +29,6 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
-    solana_votor_messages::{consensus_message::Block, migration::MigrationStatus, vote::Vote},
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{
@@ -909,6 +909,10 @@ mod tests {
             },
             voting_service::BLSOp,
         },
+        agave_votor_messages::{
+            consensus_message::{ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+            vote::Vote,
+        },
         crossbeam_channel::{unbounded, Receiver, TryRecvError},
         parking_lot::RwLock as PlRwLock,
         solana_bls_signatures::{
@@ -929,10 +933,6 @@ mod tests {
             installed_scheduler_pool::BankWithScheduler,
         },
         solana_streamer::socket::SocketAddrSpace,
-        solana_votor_messages::{
-            consensus_message::{ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
-            vote::Vote,
-        },
         std::{
             collections::HashMap,
             fs::remove_file,

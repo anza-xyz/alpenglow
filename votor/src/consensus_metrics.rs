@@ -1,11 +1,11 @@
 use {
     crate::welford_stats::WelfordStats,
+    agave_votor_messages::vote::Vote,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
     solana_metrics::datapoint_info,
     solana_pubkey::Pubkey,
-    solana_votor_messages::vote::Vote,
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{
@@ -342,10 +342,10 @@ impl ConsensusMetrics {
 mod tests {
     use {
         super::*,
+        agave_votor_messages::vote::{SkipVote, Vote},
         crossbeam_channel::unbounded,
         solana_keypair::Keypair,
         solana_signer::Signer,
-        solana_votor_messages::vote::{SkipVote, Vote},
         std::thread::sleep,
     };
 

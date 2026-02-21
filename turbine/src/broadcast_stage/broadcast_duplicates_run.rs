@@ -1,6 +1,7 @@
 use {
     super::*,
     crate::cluster_nodes::ClusterNodesCache,
+    agave_votor::event::VotorEventSender,
     crossbeam_channel::Sender,
     itertools::Itertools,
     solana_entry::{block_component::BlockComponent, entry::Entry},
@@ -10,7 +11,6 @@ use {
     solana_signature::Signature,
     solana_signer::Signer,
     solana_system_transaction as system_transaction,
-    solana_votor::event::VotorEventSender,
     std::collections::HashSet,
 };
 

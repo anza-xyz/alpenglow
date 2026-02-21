@@ -7,6 +7,14 @@ use {
         stats::{PacketStats, Stats},
     },
     crate::cluster_info_vote_listener::VerifiedVoteSender,
+    agave_votor::{
+        consensus_metrics::ConsensusMetricsEventSender,
+        consensus_rewards::{self},
+    },
+    agave_votor_messages::{
+        consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        reward_certificate::AddVoteMessage,
+    },
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     solana_bls_signatures::pubkey::Pubkey as BlsPubkey,
     solana_clock::Slot,
@@ -19,14 +27,6 @@ use {
     solana_streamer::{
         packet::PacketBatch,
         streamer::{self, StreamerError},
-    },
-    solana_votor::{
-        consensus_metrics::ConsensusMetricsEventSender,
-        consensus_rewards::{self},
-    },
-    solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
-        reward_certificate::AddVoteMessage,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -326,6 +326,11 @@ mod tests {
             bls_sigverify::stats::STATS_INTERVAL_DURATION,
             cluster_info_vote_listener::VerifiedVoteReceiver,
         },
+        agave_votor::consensus_pool::certificate_builder::CertificateBuilder,
+        agave_votor_messages::{
+            consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
+            vote::Vote,
+        },
         bitvec::prelude::{BitVec, Lsb0},
         crossbeam_channel::{Receiver, TryRecvError},
         solana_bls_signatures::{Signature, Signature as BLSSignature},
@@ -343,11 +348,6 @@ mod tests {
         solana_signer::Signer,
         solana_signer_store::encode_base2,
         solana_streamer::socket::SocketAddrSpace,
-        solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
-        solana_votor_messages::{
-            consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
-            vote::Vote,
-        },
         std::time::Instant,
     };
 
