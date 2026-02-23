@@ -42,7 +42,8 @@ use {
         },
         bank_forks::BankForks,
         block_component_processor::{
-            vote_reward::EpochInflationAccountState, BlockComponentProcessor,
+            vote_reward::epoch_inflation_account_state::EpochInflationAccountState,
+            BlockComponentProcessor,
         },
         epoch_stakes::{BLSPubkeyToRankMap, NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
