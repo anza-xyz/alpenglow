@@ -181,7 +181,7 @@ pub fn verify_base3(
 
             let (primary_agg_res, fallback_agg_res) = join(
                 || PubkeyProjective::par_aggregate(primary_pubkeys.par_iter()),
-                || PubkeyProjective::par_aggregate(fallback_pubkeys.par_iter()),
+                || PubkeyProjective::aggregate(fallback_pubkeys.iter()),
             );
 
             let pubkeys = [primary_agg_res?, fallback_agg_res?];

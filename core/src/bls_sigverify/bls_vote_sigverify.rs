@@ -360,9 +360,7 @@ fn aggregate_pubkeys_by_payload(
         .map(|(vote, pubkeys)| {
             (
                 get_vote_payload(vote),
-                // TODO(sam): https://github.com/anza-xyz/alpenglow/issues/708
-                // should improve public key aggregation drastically (more than 80%)
-                PubkeyProjective::par_aggregate(pubkeys.into_par_iter()),
+                PubkeyProjective::aggregate(pubkeys.into_iter()),
             )
         })
         .unzip();
