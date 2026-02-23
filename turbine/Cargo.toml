@@ -64,6 +64,7 @@ core_affinity = { workspace = true }
 
 [dev-dependencies]
 agave-logger = { workspace = true }
+agave-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 assert_matches = { workspace = true }
 bencher = { workspace = true }
 bs58 = { workspace = true }
@@ -73,7 +74,6 @@ solana-runtime = { workspace = true, features = ["dev-context-only-utils"] }
 solana-signature = { workspace = true, features = ["rand"] }
 solana-transaction = { workspace = true }
 solana-turbine = { path = ".", features = ["agave-unstable-api"] }
-agave-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 test-case = { workspace = true }
 
 [[bench]]

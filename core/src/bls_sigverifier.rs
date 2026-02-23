@@ -135,12 +135,7 @@ impl BLSSigVerifier {
         let root = self.banks.root();
         self.vote_buffer.clear();
         self.cert_buffer.clear();
-        Self::extract_messages(
-            batches,
-            &root,
-            &mut self.vote_buffer,
-            &mut self.cert_buffer,
-        );
+        Self::extract_messages(batches, &root, &mut self.vote_buffer, &mut self.cert_buffer);
 
         let verified_votes = Self::verify_votes(self.vote_buffer.drain(..), &root);
         let verified_certs = Self::verify_certificates(self.cert_buffer.drain(..), &root);
@@ -185,7 +180,10 @@ impl BLSSigVerifier {
         }
     }
 
-    fn verify_votes(votes: impl IntoIterator<Item = VoteMessage>, bank: &Bank) -> Vec<(VoteMessage, Pubkey)> {
+    fn verify_votes(
+        votes: impl IntoIterator<Item = VoteMessage>,
+        bank: &Bank,
+    ) -> Vec<(VoteMessage, Pubkey)> {
         // Actual BLS signature verification to follow
         votes
             .into_iter()
@@ -199,7 +197,10 @@ impl BLSSigVerifier {
             .collect()
     }
 
-    fn verify_certificates(certs: impl IntoIterator<Item = Certificate>, _bank: &Bank) -> Vec<Certificate> {
+    fn verify_certificates(
+        certs: impl IntoIterator<Item = Certificate>,
+        _bank: &Bank,
+    ) -> Vec<Certificate> {
         // Actual certificate verification to follow
         certs.into_iter().collect()
     }

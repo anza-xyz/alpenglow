@@ -18,7 +18,7 @@ use {
         votor::SharedContext,
     },
     agave_votor_messages::{consensus_message::Block, migration::MigrationStatus, vote::Vote},
-    crossbeam_channel::{select, RecvError, SendError, TrySendError},
+    crossbeam_channel::{RecvError, SendError, TrySendError, select},
     parking_lot::RwLock,
     solana_clock::Slot,
     solana_hash::Hash,
@@ -1359,9 +1359,11 @@ mod tests {
             let saved_vote_history =
                 SavedVoteHistory::new(&VoteHistory::new(new_identity.pubkey(), 0), &new_identity)
                     .unwrap();
-            assert!(file_vote_history_storage
-                .store(&SavedVoteHistoryVersions::from(saved_vote_history),)
-                .is_ok());
+            assert!(
+                file_vote_history_storage
+                    .store(&SavedVoteHistoryVersions::from(saved_vote_history),)
+                    .is_ok()
+            );
             self.cluster_info
                 .set_keypair(Arc::new(new_identity.insecure_clone()));
 

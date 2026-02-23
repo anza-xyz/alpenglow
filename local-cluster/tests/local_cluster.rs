@@ -6722,11 +6722,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
             }
         }
 
-        fn handle_experiment_start(
-            &mut self,
-            vote: &Vote,
-            node_c_turbine_mode: &TurbineMode,
-        ) {
+        fn handle_experiment_start(&mut self, vote: &Vote, node_c_turbine_mode: &TurbineMode) {
             // Phase 2: Start network partition experiment at slot 20
             if vote.slot() >= 20 && self.stage == Stage::Stability {
                 info!(
@@ -6799,7 +6795,8 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                         for stage in Stage::all() {
                             if elapsed_time > stage.timeout() {
                                 panic!(
-                                    "Timeout during {:?}. node_c_turbine_mode: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
+                                    "Timeout during {:?}. node_c_turbine_mode: {:#?}. Latest \
+                                     vote: {:#?}. Experiment state: {:#?}",
                                     stage,
                                     node_c_turbine_mode.get(),
                                     vote,

@@ -85,7 +85,7 @@ use {
     },
     solana_rpc_client_api::response::SlotUpdate,
     solana_runtime::{
-        bank::{bank_hash_details, Bank, NewBankOptions},
+        bank::{Bank, NewBankOptions, bank_hash_details},
         bank_forks::BankForks,
         block_component_processor::BlockComponentProcessorError,
         commitment::BlockCommitmentCache,
@@ -5091,7 +5091,6 @@ impl ReplayStage {
 #[cfg(test)]
 pub(crate) mod tests {
     use {
-        agave_votor::vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         super::*,
         crate::{
             commitment_service::AggregateCommitmentService,
@@ -5105,6 +5104,7 @@ pub(crate) mod tests {
             staked_validators_cache::StakedValidatorsCache,
             vote_simulator::{self, VoteSimulator},
         },
+        agave_votor::vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         blockstore_processor::{
             ProcessOptions, confirm_full_slot, fill_blockstore_slot_with_ticks, process_bank_0,
         },
@@ -5121,7 +5121,7 @@ pub(crate) mod tests {
         solana_keypair::Keypair,
         solana_ledger::{
             blockstore::{
-                entries_to_test_shreds, make_slot_entries, BlockstoreError, UpdateParentSignal,
+                BlockstoreError, UpdateParentSignal, entries_to_test_shreds, make_slot_entries,
             },
             create_new_tmp_ledger,
             genesis_utils::{create_genesis_config, create_genesis_config_with_leader},

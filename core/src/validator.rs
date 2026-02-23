@@ -82,8 +82,8 @@ use {
     solana_ledger::{
         bank_forks_utils,
         blockstore::{
-            Blockstore, BlockstoreError, PurgeType, UpdateParentReceiver,
-            MAX_COMPLETED_SLOTS_IN_CHANNEL, MAX_REPLAY_WAKE_UP_SIGNALS,
+            Blockstore, BlockstoreError, MAX_COMPLETED_SLOTS_IN_CHANNEL,
+            MAX_REPLAY_WAKE_UP_SIGNALS, PurgeType, UpdateParentReceiver,
         },
         blockstore_metric_report_service::BlockstoreMetricReportService,
         blockstore_options::{BLOCKSTORE_DIRECTORY_ROCKS_LEVEL, BlockstoreOptions},
@@ -161,8 +161,8 @@ use {
         path::{Path, PathBuf},
         str::FromStr,
         sync::{
-            atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
             Arc, Mutex, RwLock,
+            atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},

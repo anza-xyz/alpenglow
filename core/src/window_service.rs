@@ -167,9 +167,11 @@ fn run_check_duplicate(
             }
         };
 
-        if root_bank
-            .feature_set
-            .is_active(&agave_feature_set::secp256k1_program_enabled::id())
+        if bank_forks
+            .read()
+            .unwrap()
+            .migration_status()
+            .is_alpenglow_enabled()
         {
             return Ok(());
         }

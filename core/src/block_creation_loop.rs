@@ -9,15 +9,12 @@ use {
         banking_trace::{BankingPacketSender, BankingTracer},
         replay_stage::{Finalizer, ReplayStage},
     },
-    agave_votor::{
-        common::block_timeout,
-        event::LeaderWindowInfo,
-    },
+    agave_votor::{common::block_timeout, event::LeaderWindowInfo},
     agave_votor_messages::{
         consensus_message::{Block, HighestFinalizedSlotCert},
         reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
-    crossbeam_channel::{select_biased, Receiver, Sender},
+    crossbeam_channel::{Receiver, Sender, select_biased},
     solana_clock::Slot,
     solana_entry::block_component::{
         BlockFooterV1, FinalCertificate, GenesisCertificate,
@@ -28,7 +25,7 @@ use {
     solana_hash::Hash,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
     solana_measure::measure::Measure,
-    solana_perf::packet::{bytes::Bytes, BytesPacket, Meta, PacketBatch},
+    solana_perf::packet::{BytesPacket, Meta, PacketBatch, bytes::Bytes},
     solana_poh::{
         poh_recorder::{GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS, PohRecorder, PohRecorderError},
         record_channels::RecordReceiver,
@@ -311,8 +308,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
                     .unwrap_or(first);
                 trace!(
                     "{my_pubkey}: window {}-{} finalized parent",
-                    info.start_slot,
-                    info.end_slot
+                    info.start_slot, info.end_slot
                 );
                 (info, false)
             }
@@ -323,8 +319,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
                     .unwrap_or(first);
                 trace!(
                     "{my_pubkey}: window {}-{} optimistic parent",
-                    info.start_slot,
-                    info.end_slot
+                    info.start_slot, info.end_slot
                 );
                 (info, true)
             }
@@ -493,9 +488,12 @@ fn produce_block_footer(
 
     if let Some(parent_bank) = bank.parent() {
         // Get parent time from alpenglow clock (nanoseconds) or fall back to clock sysvar.
-        let parent_time_nanos = parent_bank
-            .get_nanosecond_clock()
-            .unwrap_or_else(|| parent_bank.clock().unix_timestamp.saturating_mul(1_000_000_000));
+        let parent_time_nanos = parent_bank.get_nanosecond_clock().unwrap_or_else(|| {
+            parent_bank
+                .clock()
+                .unix_timestamp
+                .saturating_mul(1_000_000_000)
+        });
         let parent_slot = parent_bank.slot();
 
         block_producer_time_nanos = skew_block_producer_time_nanos(
@@ -559,9 +557,7 @@ fn handle_parent_ready(
 
     trace!(
         "{:?}: Sad leader handover slot optimistic parent = {:?} != {:?} = finalized parent",
-        ctx.my_pubkey,
-        optimistic_parent_block,
-        leader_window_info.parent_block
+        ctx.my_pubkey, optimistic_parent_block, leader_window_info.parent_block
     );
 
     // Switch timeout tracking to the finalized-parent timer.
@@ -766,10 +762,7 @@ fn record_and_complete_block(
     // will properly increment the tick_height to max_tick_height.
     bank.set_tick_height(max_tick_height - 1);
 
-    BlockComponentProcessor::update_bank_with_footer(
-        bank.clone(),
-        &footer,
-    );
+    BlockComponentProcessor::update_bank_with_footer(bank.clone(), &footer);
 
     drop(bank);
     w_poh_recorder.tick_alpenglow(max_tick_height, footer);
@@ -975,7 +968,8 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
     ctx.poh_recorder.write().unwrap().set_bank(tpu_bank);
     // If this the very first alpenglow block, include the genesis certificate
     if parent_slot == ctx.genesis_cert.slot {
-        let genesis_marker = VersionedBlockMarker::new_genesis_certificate(ctx.genesis_cert.clone());
+        let genesis_marker =
+            VersionedBlockMarker::new_genesis_certificate(ctx.genesis_cert.clone());
         ctx.poh_recorder
             .write()
             .unwrap()

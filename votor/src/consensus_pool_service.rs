@@ -968,8 +968,8 @@ mod tests {
     }
 
     /// Creates a test context for testing process_pending_safe_to_notar directly
-    fn setup_pending_safe_to_notar_test(
-    ) -> (ConsensusPoolContext, ConsensusPool, Receiver<RepairEvent>) {
+    fn setup_pending_safe_to_notar_test()
+    -> (ConsensusPoolContext, ConsensusPool, Receiver<RepairEvent>) {
         let (consensus_message_sender, consensus_message_receiver) = crossbeam_channel::unbounded();
         let (bls_sender, _bls_receiver) = crossbeam_channel::unbounded();
         let (event_sender, _event_receiver) = crossbeam_channel::unbounded();

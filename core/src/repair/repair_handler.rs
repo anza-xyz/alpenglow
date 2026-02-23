@@ -18,7 +18,7 @@ use {
         ancestor_iterator::{AncestorIterator, AncestorIteratorWithHash},
         blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
-        shred::{ErasureSetId, Nonce, DATA_SHREDS_PER_FEC_BLOCK},
+        shred::{DATA_SHREDS_PER_FEC_BLOCK, ErasureSetId, Nonce},
     },
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, RecycledPacketBatch},
     solana_poh::poh_recorder::SharedLeaderState,
@@ -42,9 +42,7 @@ fn create_response_packet_batch<T: serde::Serialize>(
     let serialized_response = serialize(response).ok()?;
     let packet =
         repair_response::repair_response_packet_from_bytes(serialized_response, from_addr, nonce)?;
-    Some(
-        RecycledPacketBatch::new_with_recycler_data(recycler, debug_label, vec![packet]).into(),
-    )
+    Some(RecycledPacketBatch::new_with_recycler_data(recycler, debug_label, vec![packet]).into())
 }
 
 pub trait RepairHandler {
@@ -220,8 +218,7 @@ pub trait RepairHandler {
         let fec_set_root = self
             .blockstore()
             .merkle_root_meta_for_fec_set(ErasureSetId::new(slot, fec_set_index))
-            .expect("Unable to fetch merkle root meta")
-            ?
+            .expect("Unable to fetch merkle root meta")?
             .merkle_root()
             .expect("Legacy shreds are gone, merkle root must exist");
         let proof_index = fec_set_index.checked_div(DATA_SHREDS_PER_FEC_BLOCK as u32)?;

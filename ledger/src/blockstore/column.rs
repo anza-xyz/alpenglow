@@ -1,9 +1,6 @@
 //! Traits that define how data is encoded in the RocksDB-backed Blockstore.
 use {
-    crate::{
-        blockstore::error::Result,
-        blockstore_meta,
-    },
+    crate::{blockstore::error::Result, blockstore_meta},
     bincode::Options as BincodeOptions,
     serde::{Serialize, de::DeserializeOwned},
     solana_clock::{Slot, UnixTimestamp},

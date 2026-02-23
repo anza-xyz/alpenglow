@@ -672,13 +672,15 @@ mod test {
         // Slots before alpenglow don't have alpenglow ticks
         let slot = 9;
         let parent_slot = 8;
-        assert!(ForkProgress::calculate_alpenglow_ticks(
-            slot,
-            first_alpenglow_slot,
-            parent_slot,
-            ticks_per_slot
-        )
-        .is_none());
+        assert!(
+            ForkProgress::calculate_alpenglow_ticks(
+                slot,
+                first_alpenglow_slot,
+                parent_slot,
+                ticks_per_slot
+            )
+            .is_none()
+        );
 
         // First alpenglow slot should only have 1 tick
         let slot = first_alpenglow_slot;

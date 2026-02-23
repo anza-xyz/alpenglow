@@ -286,7 +286,6 @@ impl MigrationPhase {
     fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool {
         self.is_alpenglow_block(slot)
     }
-
 }
 
 /// Keeps track of the current migration status

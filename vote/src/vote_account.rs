@@ -158,7 +158,6 @@ impl VoteAccount {
 
         VoteAccount::try_from(account).unwrap()
     }
-
 }
 
 impl VoteAccounts {

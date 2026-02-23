@@ -38,13 +38,12 @@ use {
         ping_pong::{self, Pong},
         weighted_shuffle::WeightedShuffle,
     },
-    solana_hash::{Hash, HASH_BYTES},
-    solana_keypair::{signable::Signable, Keypair},
+    solana_hash::{HASH_BYTES, Hash},
+    solana_keypair::{Keypair, signable::Signable},
     solana_ledger::shred::{
-        self,
+        self, DATA_SHREDS_PER_FEC_BLOCK, MAX_FEC_SETS_PER_SLOT, Nonce, SIZE_OF_NONCE,
+        ShredFetchStats,
         merkle_tree::{self, SIZE_OF_MERKLE_PROOF_ENTRY},
-        Nonce, ShredFetchStats, DATA_SHREDS_PER_FEC_BLOCK, MAX_FEC_SETS_PER_SLOT,
-        SIZE_OF_NONCE,
     },
     solana_net_utils::SocketAddrSpace,
     solana_packet::PACKET_DATA_SIZE,
@@ -56,7 +55,7 @@ use {
     solana_pubkey::{PUBKEY_BYTES, Pubkey},
     solana_runtime::bank_forks::SharableBanks,
     solana_sha256_hasher::hashv,
-    solana_signature::{Signature, SIGNATURE_BYTES},
+    solana_signature::{SIGNATURE_BYTES, Signature},
     solana_signer::Signer,
     solana_streamer::{
         sendmmsg::{SendPktsError, batch_send},
@@ -415,7 +414,7 @@ type PingCache = ping_pong::PingCache<REPAIR_PING_TOKEN_SIZE>;
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiEnumVisitor, AbiExample),
-    frozen_abi(digest = "7XVfjbxcWhiwubU3BkE5QPT6qQLkKBraYGhAHZKWx6UZ")
+    frozen_abi(digest = "FPKq83Lf8XaZWQ5ZWPeuakLFCmoKgbccCtZHMLM2bwGp")
 )]
 #[derive(Debug, Deserialize, Serialize)]
 pub enum RepairProtocol {
@@ -1625,7 +1624,9 @@ impl ServeRepair {
                 block_id,
             } => {
                 let shred_index = u64::from(*index);
-                repair_stats.shred.update(repair_peer_id, *slot, shred_index);
+                repair_stats
+                    .shred
+                    .update(repair_peer_id, *slot, shred_index);
                 RepairProtocol::WindowIndexForBlockId {
                     header,
                     slot: *slot,

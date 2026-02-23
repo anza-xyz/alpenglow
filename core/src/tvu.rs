@@ -52,7 +52,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
-        blockstore::{Blockstore, UpdateParentReceiver, MAX_COMPLETED_SLOTS_IN_CHANNEL},
+        blockstore::{Blockstore, MAX_COMPLETED_SLOTS_IN_CHANNEL, UpdateParentReceiver},
         blockstore_cleanup_service::BlockstoreCleanupService,
         blockstore_processor::TransactionStatusSender,
         entry_notifier_service::EntryNotifierSender,

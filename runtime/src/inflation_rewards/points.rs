@@ -8,8 +8,7 @@ use {
         stake_history::StakeHistory,
         state::{Delegation, Stake, StakeStateV2},
     },
-    solana_vote::vote_account::VoteAccount,
-    solana_vote::vote_state_view::VoteStateView,
+    solana_vote::{vote_account::VoteAccount, vote_state_view::VoteStateView},
     std::cmp::Ordering,
 };
 

@@ -82,10 +82,16 @@ impl StakedValidatorsCache {
             [bank_forks.root_bank(), bank_forks.working_bank()]
         };
 
-        let epoch_staked_nodes = banks.iter().find_map(|bank| bank.epoch_staked_nodes(epoch)).unwrap_or_else(|| {
-            error!("StakedValidatorsCache::get: unknown Bank::epoch_staked_nodes for epoch: {epoch}");
-            Arc::<HashMap<Pubkey, u64>>::default()
-        });
+        let epoch_staked_nodes = banks
+            .iter()
+            .find_map(|bank| bank.epoch_staked_nodes(epoch))
+            .unwrap_or_else(|| {
+                error!(
+                    "StakedValidatorsCache::get: unknown Bank::epoch_staked_nodes for epoch: \
+                     {epoch}"
+                );
+                Arc::<HashMap<Pubkey, u64>>::default()
+            });
 
         struct Node {
             stake: u64,

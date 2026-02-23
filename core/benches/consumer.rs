@@ -9,12 +9,14 @@ use {
     },
     solana_account::{Account, AccountSharedData},
     solana_clock::Epoch,
-    solana_core::banking_stage::{committer::Committer, consumer::Consumer, qos_service::QosService},
+    solana_core::banking_stage::{
+        committer::Committer, consumer::Consumer, qos_service::QosService,
+    },
     solana_entry::entry::Entry,
     solana_keypair::Keypair,
     solana_ledger::{
         blockstore::Blockstore,
-        genesis_utils::{create_genesis_config, GenesisConfigInfo},
+        genesis_utils::{GenesisConfigInfo, create_genesis_config},
     },
     solana_poh::{
         poh_recorder::create_test_recorder, poh_service::PohService,
@@ -27,8 +29,8 @@ use {
     solana_system_transaction as system_transaction,
     solana_transaction::sanitized::SanitizedTransaction,
     std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
     },
     tempfile::TempDir,
     test::Bencher,
@@ -159,10 +161,12 @@ fn bench_process_and_record_transactions(bencher: &mut Bencher, batch_size: usiz
         for _ in 0..batches_per_iteration {
             let summary =
                 consumer.process_and_record_transactions(&bank, transaction_iter.next().unwrap());
-            assert!(summary
-                .execute_and_commit_transactions_output
-                .commit_transactions_result
-                .is_ok());
+            assert!(
+                summary
+                    .execute_and_commit_transactions_output
+                    .commit_transactions_result
+                    .is_ok()
+            );
         }
     });
 

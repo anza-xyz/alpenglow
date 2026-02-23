@@ -88,7 +88,7 @@ impl WelfordStats {
 mod tests {
     use {
         super::*,
-        rand::{rngs::StdRng, Rng, SeedableRng},
+        rand::{Rng, SeedableRng, rngs::StdRng},
         test_case::test_matrix,
     };
 

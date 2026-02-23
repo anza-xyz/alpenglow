@@ -43,7 +43,7 @@ use {
             },
         },
         bank_forks::BankForks,
-        block_component_processor::{vote_reward::VoteRewardAccountState, BlockComponentProcessor},
+        block_component_processor::{BlockComponentProcessor, vote_reward::VoteRewardAccountState},
         epoch_stakes::{
             BLSPubkeyToRankMap, DeserializableVersionedEpochStakes, NodeVoteAccounts,
             VersionedEpochStakes,
@@ -6116,9 +6116,10 @@ impl Bank {
     }
 
     pub fn get_top_epoch_stakes(&self) -> Stakes<StakeAccount<Delegation>> {
-        let stakes = if self
-            .feature_set
-            .is_active(&feature_set::alpenglow_vat_and_limit_validators::id())
+        let stakes = if self.feature_set.is_active(&feature_set::alpenglow::id())
+            && self
+                .feature_set
+                .is_active(&feature_set::alpenglow_vat_and_limit_validators::id())
         {
             self.stakes_cache.stakes().clone_and_filter_for_alpenglow(
                 MAX_ALPENGLOW_VOTE_ACCOUNTS,

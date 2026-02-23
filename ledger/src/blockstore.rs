@@ -17,9 +17,9 @@ use {
         leader_schedule_cache::LeaderScheduleCache,
         next_slots_iterator::NextSlotsIterator,
         shred::{
-            merkle_tree::{MerkleTree, SIZE_OF_MERKLE_PROOF_ENTRY, get_proof_size},
             self, DATA_SHREDS_PER_FEC_BLOCK, ErasureSetId, ProcessShredsStats, ReedSolomonCache,
             Shred, ShredFlags, ShredId, ShredType, Shredder,
+            merkle_tree::{MerkleTree, SIZE_OF_MERKLE_PROOF_ENTRY, get_proof_size},
         },
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
@@ -80,8 +80,8 @@ use {
         path::{Path, PathBuf},
         rc::Rc,
         sync::{
-            atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Mutex, MutexGuard, RwLock,
+            atomic::{AtomicBool, AtomicU64, Ordering},
         },
     },
     tar,
@@ -876,11 +876,7 @@ impl Blockstore {
             ]))))
             .collect();
 
-        Some(self.build_and_insert_double_merkle_meta(
-            slot,
-            fec_set_count,
-            merkle_tree_leaves,
-        ))
+        Some(self.build_and_insert_double_merkle_meta(slot, fec_set_count, merkle_tree_leaves))
     }
 
     /// Given the leaves of the double merkle tree, build the tree and proofs and insert them.
@@ -901,7 +897,8 @@ impl Blockstore {
         let tree_size = fec_set_count + 1;
         let proofs: Vec<Vec<u8>> = (0..tree_size)
             .map(|leaf_index| {
-                merkle_tree.make_merkle_proof(leaf_index, tree_size)
+                merkle_tree
+                    .make_merkle_proof(leaf_index, tree_size)
                     .map(|proof_entry| {
                         proof_entry.expect("Merkle proof construction cannot fail for valid leaves")
                     })
@@ -1799,7 +1796,8 @@ impl Blockstore {
         let lock = self.insert_shreds_lock.lock().unwrap();
 
         // 1. Backup the original block if needed
-        if let Some(dmr) = self.get_double_merkle_root_from_location(slot, BlockLocation::Original) {
+        if let Some(dmr) = self.get_double_merkle_root_from_location(slot, BlockLocation::Original)
+        {
             let backup_location = BlockLocation::Alternate { block_id: dmr };
             if self
                 .get_double_merkle_root_from_location(slot, backup_location)
@@ -4561,8 +4559,8 @@ impl Blockstore {
         let Ok(results) = results else {
             if !is_leader {
                 warn!(
-                    "Unable to check the last fec set for slot {slot} {bank_hash}, \
-                 marking as dead: {results:?}",
+                    "Unable to check the last fec set for slot {slot} {bank_hash}, marking as \
+                     dead: {results:?}",
                 );
             }
             if feature_set.is_active(&agave_feature_set::vote_only_full_fec_sets::id()) {
@@ -5321,14 +5319,17 @@ impl Blockstore {
         parent_metas: &HashMap<u64, WorkingEntry<ParentMeta>>,
         new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
     ) -> Result<()> {
-        let update_parent_entries = parent_metas.iter().filter_map(|(slot, parent_meta)| {
-            match parent_meta {
-                WorkingEntry::Dirty(parent_meta) if parent_meta.populated_from_update_parent() => {
-                    Some((*slot, parent_meta.parent_slot))
-                }
-                _ => None,
-            }
-        });
+        let update_parent_entries =
+            parent_metas
+                .iter()
+                .filter_map(|(slot, parent_meta)| match parent_meta {
+                    WorkingEntry::Dirty(parent_meta)
+                        if parent_meta.populated_from_update_parent() =>
+                    {
+                        Some((*slot, parent_meta.parent_slot))
+                    }
+                    _ => None,
+                });
 
         for (slot, new_parent_slot) in update_parent_entries {
             // Get or create slot meta. When UpdateParent is inserted separately from
@@ -12942,5 +12943,4 @@ pub mod tests {
             Err(TransactionError::InsufficientFundsForFee)
         );
     }
-
 }

@@ -3,11 +3,11 @@ use {
     agave_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage},
         fraction::Fraction,
-        migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
+        migration::{GENESIS_VOTE_THRESHOLD, MigrationStatus},
     },
     crossbeam_channel::Sender,
     log::{info, warn},
-    solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
+    solana_clock::{DEFAULT_MS_PER_SLOT, Slot},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
         VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
@@ -119,12 +119,9 @@ impl BlockComponentProcessor {
         let VersionedBlockMarker::V1(marker) = marker;
 
         match marker {
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(
-                bank,
-                parent_bank,
-                footer.inner(),
-                finalization_cert_sender,
-            ),
+            BlockMarkerV1::BlockFooter(footer) => {
+                self.on_footer(bank, parent_bank, footer.inner(), finalization_cert_sender)
+            }
             BlockMarkerV1::BlockHeader(header) => self.on_header(header.inner()),
             BlockMarkerV1::UpdateParent(update_parent) => {
                 self.on_update_parent(update_parent.inner())
@@ -201,8 +198,8 @@ impl BlockComponentProcessor {
         let genesis_percent = Fraction::new(genesis_stake, total_stake);
         if genesis_percent < GENESIS_VOTE_THRESHOLD {
             warn!(
-                "Received a genesis certificate for {slot} in bank slot {} with \
-                 {genesis_percent} stake < {GENESIS_VOTE_THRESHOLD}",
+                "Received a genesis certificate for {slot} in bank slot {} with {genesis_percent} \
+                 stake < {GENESIS_VOTE_THRESHOLD}",
                 bank.slot()
             );
             return Err(BlockComponentProcessorError::GenesisCertificateFailedVerification);
@@ -304,7 +301,8 @@ impl BlockComponentProcessor {
         };
 
         let parent_slot = parent_bank.slot();
-        let current_time_nanos = i64::try_from(footer.block_producer_time_nanos).unwrap_or(i64::MAX);
+        let current_time_nanos =
+            i64::try_from(footer.block_producer_time_nanos).unwrap_or(i64::MAX);
         let current_slot = bank.slot();
 
         let (lower_bound_nanos, upper_bound_nanos) =
@@ -330,15 +328,19 @@ impl BlockComponentProcessor {
         let diff_slots = i64::try_from(slot.saturating_sub(parent_slot)).unwrap_or(i64::MAX);
 
         let min_working_bank_time = parent_time_nanos.saturating_add(1);
-        let max_working_bank_time = parent_time_nanos
-            .saturating_add(diff_slots.saturating_mul(2).saturating_mul(default_ns_per_slot));
+        let max_working_bank_time = parent_time_nanos.saturating_add(
+            diff_slots
+                .saturating_mul(2)
+                .saturating_mul(default_ns_per_slot),
+        );
 
         (min_working_bank_time, max_working_bank_time)
     }
 
     pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
         // Update clock sysvar from footer timestamp.
-        let unix_timestamp_nanos = i64::try_from(footer.block_producer_time_nanos).unwrap_or(i64::MAX);
+        let unix_timestamp_nanos =
+            i64::try_from(footer.block_producer_time_nanos).unwrap_or(i64::MAX);
         bank.update_clock_from_footer(unix_timestamp_nanos);
         calculate_and_pay_voting_reward(&bank, None).unwrap();
         // Record expected bank hash from footer for later verification when the bank is frozen.

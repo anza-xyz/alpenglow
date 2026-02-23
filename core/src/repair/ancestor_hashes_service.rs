@@ -641,9 +641,8 @@ impl AncestorHashesService {
                         .bank_forks
                         .read()
                         .unwrap()
-                        .root_bank()
-                        .feature_set
-                        .is_active(&agave_feature_set::secp256k1_program_enabled::id())
+                        .migration_status()
+                        .is_alpenglow_enabled()
                     {
                         return;
                     }

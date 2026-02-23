@@ -954,9 +954,7 @@ impl ParentMeta {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub enum BlockLocation {
     Original,
-    Alternate {
-        block_id: Hash,
-    },
+    Alternate { block_id: Hash },
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

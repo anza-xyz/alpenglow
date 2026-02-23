@@ -466,14 +466,18 @@ impl Bank {
         };
         let stake_state = stake_account.stake_state();
 
-        let commission_bps_for_vote_account = |vote_account: &solana_vote::vote_account::VoteAccount| {
-            if commission_rate_in_basis_points && solana_vote_program::check_id(vote_account.owner())
-            {
-                vote_account.vote_state_view().inflation_rewards_commission()
-            } else {
-                vote_account.commission() as u16 * 100
-            }
-        };
+        let commission_bps_for_vote_account =
+            |vote_account: &solana_vote::vote_account::VoteAccount| {
+                if commission_rate_in_basis_points
+                    && solana_vote_program::check_id(vote_account.owner())
+                {
+                    vote_account
+                        .vote_state_view()
+                        .inflation_rewards_commission()
+                } else {
+                    vote_account.commission() as u16 * 100
+                }
+            };
 
         // Fetch the voter commission from past epochs to attempt to
         // delay the effect of commission updates by at least one

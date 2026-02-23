@@ -11,17 +11,19 @@ mod stats;
 use {
     super::{
         repair_service::{OutstandingShredRepairs, REPAIR_REQUEST_TIMEOUT_MS},
-        serve_repair::{RepairPeers, ServeRepair, ShredRepairType, REPAIR_PEERS_CACHE_CAPACITY},
+        serve_repair::{REPAIR_PEERS_CACHE_CAPACITY, RepairPeers, ServeRepair, ShredRepairType},
         standard_repair_handler::StandardRepairHandler,
     },
     crate::repair::{
         outstanding_requests::OutstandingRequests,
         packet_threshold::DynamicPacketToProcessThreshold,
-        repair_service::{RepairInfo, RepairStats, REPAIR_MS},
+        repair_service::{REPAIR_MS, RepairInfo, RepairStats},
         serve_repair::{
             BlockIdRepairResponse, BlockIdRepairType, RepairProtocol, RepairRequestProtocol,
         },
     },
+    agave_votor::event::{RepairEvent, RepairEventReceiver},
+    agave_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     crossbeam_channel::{select, unbounded},
     log::{debug, info},
     lru::LruCache,
@@ -33,26 +35,24 @@ use {
         shred::DATA_SHREDS_PER_FEC_BLOCK,
     },
     solana_perf::{
-        packet::{deserialize_from_with_limit, PacketRef},
+        packet::{PacketRef, deserialize_from_with_limit},
         recycler::Recycler,
     },
     solana_pubkey::Pubkey,
     solana_runtime::bank_forks::SharableBanks,
     solana_streamer::{
-        sendmmsg::{batch_send, SendPktsError},
+        sendmmsg::{SendPktsError, batch_send},
         streamer::{self, PacketBatchReceiver, StreamerReceiveStats},
     },
     solana_time_utils::timestamp,
-    agave_votor::event::{RepairEvent, RepairEventReceiver},
-    agave_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     stats::{BlockIdRepairRequestsStats, BlockIdRepairResponsesStats},
     std::{
         collections::{BinaryHeap, HashMap, HashSet},
         io::Cursor,
         net::{SocketAddr, UdpSocket},
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc, RwLock,
+            atomic::{AtomicBool, Ordering},
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -98,8 +98,8 @@ impl RepairRequest {
 impl Ord for RepairRequest {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use {
-            std::cmp::Ordering, BlockIdRepairType::*, RepairRequest::*,
-            ShredRepairType::ShredForBlockId,
+            BlockIdRepairType::*, RepairRequest::*, ShredRepairType::ShredForBlockId,
+            std::cmp::Ordering,
         };
 
         // pong has highest priority - must respond to ping challenges immediately
@@ -587,10 +587,8 @@ impl BlockIdRepairService {
                 }
 
                 // Turbine did not fail, check the progress
-                match blockstore.get_double_merkle_root_from_location(
-                    slot,
-                    BlockLocation::Original,
-                ) {
+                match blockstore.get_double_merkle_root_from_location(slot, BlockLocation::Original)
+                {
                     None => {
                         // Turbine has not completed, defer and check again later
                         debug!(
@@ -639,11 +637,13 @@ impl BlockIdRepairService {
         location: BlockLocation,
         state: &mut RepairState,
     ) {
-        debug_assert!(blockstore
-            .meta_from_location(slot, location)
-            .unwrap()
-            .unwrap()
-            .is_full());
+        debug_assert!(
+            blockstore
+                .meta_from_location(slot, location)
+                .unwrap()
+                .unwrap()
+                .is_full()
+        );
         let parent = blockstore
             .get_parent_meta_from_location(slot, location)
             .unwrap()
@@ -695,11 +695,11 @@ impl BlockIdRepairService {
             return false;
         };
 
-        let location = BlockLocation::Alternate {
-            block_id: *block_id,
-        };
+        // Alternate-block shred indexes are currently tracked in the slot index.
+        // We still keep `block_id` in the request shape for protocol compatibility.
+        let _ = block_id;
         blockstore
-            .get_index_from_location(*slot, location)
+            .get_index(*slot)
             .ok()
             .flatten()
             .map(|idx| idx.data().contains(*index as u64))
@@ -846,8 +846,7 @@ mod tests {
         solana_hash::Hash,
         solana_keypair::{Keypair, Signer},
         solana_ledger::{
-            blockstore::Blockstore,
-            get_tmp_ledger_path_auto_delete,
+            blockstore::Blockstore, get_tmp_ledger_path_auto_delete,
             shred::merkle_tree::SIZE_OF_MERKLE_PROOF_ENTRY,
         },
         solana_net_utils::SocketAddrSpace,
@@ -1194,9 +1193,11 @@ mod tests {
         assert_eq!(state.pending_repair_requests.len(), fec_set_count);
 
         // Verify: request was removed from sent_requests
-        assert!(!state
-            .sent_requests
-            .contains_key(&RepairRequest::Metadata(request)));
+        assert!(
+            !state
+                .sent_requests
+                .contains_key(&RepairRequest::Metadata(request))
+        );
 
         // Verify: stats were updated
         assert_eq!(state.response_stats.parent_fec_set_count_responses, 1);
@@ -1286,9 +1287,11 @@ mod tests {
         }
 
         // Verify: request was removed from sent_requests
-        assert!(!state
-            .sent_requests
-            .contains_key(&RepairRequest::Metadata(request)));
+        assert!(
+            !state
+                .sent_requests
+                .contains_key(&RepairRequest::Metadata(request))
+        );
 
         // Verify: stats were updated
         assert_eq!(state.response_stats.fec_set_root_responses, 1);

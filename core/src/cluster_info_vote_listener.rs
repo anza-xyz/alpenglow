@@ -624,10 +624,7 @@ impl ClusterInfoVoteListener {
         let mut new_optimistic_confirmed_slots = vec![];
 
         // Process votes from gossip and ReplayStage
-        if root_bank
-            .feature_set
-            .is_active(&agave_feature_set::secp256k1_program_enabled::id())
-        {
+        if notifiers.migration_status.is_alpenglow_enabled() {
             return vec![];
         }
 

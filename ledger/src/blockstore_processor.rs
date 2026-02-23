@@ -1553,9 +1553,8 @@ pub fn confirm_slot(
         match component {
             BlockComponent::EntryBatch(entries) => {
                 let slot_full = slot_full
-                    && last_entry_batch_index.is_some_and(|last_entry_batch_ix| {
-                        ix == last_entry_batch_ix
-                    });
+                    && last_entry_batch_index
+                        .is_some_and(|last_entry_batch_ix| ix == last_entry_batch_ix);
 
                 // Skip block component validation for genesis block. Slot 0 is handled specially,
                 // since it won't have the required block markers.

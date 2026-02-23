@@ -125,7 +125,7 @@ pub const SHREDS_PER_FEC_BLOCK: usize = DATA_SHREDS_PER_FEC_BLOCK + CODING_SHRED
 pub const MAX_DATA_SHREDS_PER_SLOT: usize = 32_768;
 pub const MAX_CODE_SHREDS_PER_SLOT: usize = MAX_DATA_SHREDS_PER_SLOT;
 
-pub const MAX_FEC_SETS_PER_SLOT : usize = MAX_DATA_SHREDS_PER_SLOT / DATA_SHREDS_PER_FEC_BLOCK;
+pub const MAX_FEC_SETS_PER_SLOT: usize = MAX_DATA_SHREDS_PER_SLOT / DATA_SHREDS_PER_FEC_BLOCK;
 
 // Statically compute the typical data batch size assuming:
 // 1. 32:32 erasure coding batch

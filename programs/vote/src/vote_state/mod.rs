@@ -6,8 +6,10 @@ pub mod handler;
 #[cfg(not(feature = "dev-context-only-utils"))]
 pub(crate) mod handler;
 
-pub use solana_vote_interface::state::{vote_state_versions::*, *};
-pub use handler::VoteStateTargetVersion;
+pub use {
+    handler::VoteStateTargetVersion,
+    solana_vote_interface::state::{vote_state_versions::*, *},
+};
 use {
     handler::{VoteStateHandle, VoteStateHandler},
     log::*,

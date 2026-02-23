@@ -13,8 +13,8 @@ use {
             outstanding_requests::OutstandingRequests,
             repair_weight::RepairWeight,
             serve_repair::{
-                self, RepairPeers, RepairProtocol, RepairRequestHeader, RepairRequestProtocol,
-                ServeRepair, ShredRepairType, REPAIR_PEERS_CACHE_CAPACITY,
+                self, REPAIR_PEERS_CACHE_CAPACITY, RepairPeers, RepairProtocol,
+                RepairRequestHeader, RepairRequestProtocol, ServeRepair, ShredRepairType,
             },
         },
     },
@@ -712,9 +712,12 @@ impl RepairService {
             repair_metrics,
         );
 
-        if !root_bank
-            .feature_set
-            .is_active(&agave_feature_set::secp256k1_program_enabled::id())
+        if !repair_info
+            .bank_forks
+            .read()
+            .unwrap()
+            .migration_status()
+            .is_alpenglow_enabled()
         {
             Self::handle_popular_pruned_forks(
                 root_bank.clone(),

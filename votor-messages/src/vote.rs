@@ -3,7 +3,7 @@ use {
     serde::{Deserialize, Serialize},
     solana_clock::Slot,
     solana_hash::Hash,
-    wincode::{containers::Pod, SchemaRead, SchemaWrite},
+    wincode::{SchemaRead, SchemaWrite, containers::Pod},
 };
 
 /// Enum that clients can use to parse and create the vote
