@@ -70,7 +70,7 @@ fn generate_test_data(num_distinct_messages: usize, batch_size: usize) -> Vec<Vo
 
         votes_to_verify.push(VoteToVerify {
             vote_message,
-            bls_pubkey: bls_keypair.public.into(),
+            bls_pubkey: bls_keypair.public,
             pubkey: Keypair::new().pubkey(),
         });
     }

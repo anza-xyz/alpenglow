@@ -12,8 +12,9 @@ use {
     },
     crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{
-        keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed, BlsError,
-        Pubkey as BLSPubkey,
+        keypair::Keypair as BLSKeypair,
+        pubkey::{PubkeyAffine as BLSPubkeyAffine, PubkeyCompressed as BLSPubkeyCompressed},
+        BlsError,
     },
     solana_clock::Slot,
     solana_keypair::Keypair,
@@ -216,7 +217,7 @@ pub fn generate_vote_tx(
 
     let bls_keypair = get_or_insert_bls_keypair(derived_bls_keypairs, &authorized_voter_keypair)
         .unwrap_or_else(|e| panic!("Failed to derive my own BLS keypair: {e:?}"));
-    let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
+    let my_bls_pubkey: BLSPubkeyAffine = bls_keypair.public;
     if my_bls_pubkey != bls_pubkey_in_vote_account {
         panic!(
             "Vote account bls_pubkey mismatch: {bls_pubkey_in_vote_account:?} (expected: \
