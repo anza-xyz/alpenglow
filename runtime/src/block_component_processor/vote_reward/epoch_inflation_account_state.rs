@@ -147,3 +147,61 @@ impl EpochInflationAccountState {
             .minimum_balance(account_size as usize)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*, crate::bank::EpochInflationRewards, solana_genesis_config::GenesisConfig,
+        std::sync::Arc,
+    };
+
+    #[test]
+    fn serialization_works() {
+        let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let state = EpochInflationAccountState {
+            prev: EpochInflationState {
+                max_possible_validator_reward: 23432,
+                slots_per_epoch: 2532,
+                epoch: 321,
+            },
+            current: EpochInflationState {
+                max_possible_validator_reward: 76463,
+                slots_per_epoch: 2346,
+                epoch: 2345,
+            },
+        };
+        state.set_state(&bank);
+        let deserialized = EpochInflationAccountState::new_from_bank(&bank);
+        assert_eq!(state, deserialized);
+    }
+
+    #[test]
+    fn epoch_update_works() {
+        let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let first_slot_in_epoch_1 = bank.epoch_schedule().get_first_slot_in_epoch(1);
+        let bank =
+            Bank::new_from_parent(Arc::new(bank), &Pubkey::new_unique(), first_slot_in_epoch_1);
+        let prev_epoch = 1;
+        let prev_epoch_capitalization = 12345;
+        let additional_validator_rewards = 6789;
+        EpochInflationAccountState::new_epoch_update_account(
+            &bank,
+            prev_epoch,
+            prev_epoch_capitalization,
+            additional_validator_rewards,
+        );
+        let EpochInflationAccountState { current, .. } =
+            EpochInflationAccountState::new_from_bank(&bank);
+        let EpochInflationRewards {
+            validator_rewards_lamports,
+            ..
+        } = bank.calculate_epoch_inflation_rewards(
+            prev_epoch_capitalization + additional_validator_rewards,
+            prev_epoch,
+        );
+        assert_eq!(
+            current.max_possible_validator_reward,
+            validator_rewards_lamports
+        );
+    }
+}
