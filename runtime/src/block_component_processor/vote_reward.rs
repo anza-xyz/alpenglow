@@ -110,24 +110,20 @@ pub(super) fn calculate_and_pay_voting_reward(
                 );
                 continue;
             };
-            pay_reward(
-                current_epoch,
-                validator_to_reward,
-                current_slot_account,
-                validator_reward,
-                &mut paid_vote_accounts,
-            );
+            if let Some(account_data) =
+                pay_reward(current_epoch, current_slot_account, validator_reward)
+            {
+                paid_vote_accounts.push((validator_to_reward, account_data));
+            }
         }
     }
     match current_vote_accounts.get(&current_slot_leader) {
         Some((_, leader_account)) => {
-            pay_reward(
-                current_epoch,
-                current_slot_leader,
-                leader_account,
-                total_leader_reward,
-                &mut paid_vote_accounts,
-            );
+            if let Some(account_data) =
+                pay_reward(current_epoch, leader_account, total_leader_reward)
+            {
+                paid_vote_accounts.push((current_slot_leader, account_data));
+            }
         }
         None => {
             info!("Current slot {current_slot}'s leader's account {current_slot_leader} not found")
@@ -163,23 +159,14 @@ fn calculate_reward(
     (validator_reward_lamports, leader_reward_lamports)
 }
 
-fn pay_reward(
-    epoch: Epoch,
-    pubkey: Pubkey,
-    account: &VoteAccount,
-    reward: u64,
-    accounts_to_store: &mut Vec<(Pubkey, AccountSharedData)>,
-) {
+fn pay_reward(epoch: Epoch, account: &VoteAccount, reward: u64) -> Option<AccountSharedData> {
     let data = account.account().data_clone();
     // TODO (akhi): this is a stop gap till we upstream.
     let Ok(mut vote_state) = bincode::deserialize(&data) else {
-        return;
+        return None;
     };
     increment_credits(&mut vote_state, epoch, reward);
-    accounts_to_store.push((
-        pubkey,
-        AccountSharedData::new_data(account.lamports(), &vote_state, account.owner()).unwrap(),
-    ));
+    Some(AccountSharedData::new_data(account.lamports(), &vote_state, account.owner()).unwrap())
 }
 
 // TODO (akhi): this is a stop gap till we upstream.  We want to use the `VoteStateHandler` API.
@@ -239,5 +226,14 @@ mod tests {
         };
 
         calculate_reward(&epoch_state, circulating_supply, circulating_supply);
+    }
+
+    #[test]
+    fn increment_credits_works() {
+        let mut vote_state = VoteStateV4::default();
+        let epoch = 1234;
+        let credits = 543432;
+        increment_credits(&mut vote_state, epoch, credits);
+        assert_eq!(credits, vote_state.epoch_credits.last().unwrap().1);
     }
 }
