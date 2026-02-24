@@ -261,7 +261,7 @@ impl SigVerifier {
         (certs, votes_buffer)
     }
 
-    /// If this vote should be verified, then returns the sender's Pubkey and BlsPubkey.
+    /// If this vote should be verified, then returns the sender's Pubkey and BlsPubkeyAffine.
     fn keep_vote(
         &mut self,
         vote: &VoteMessage,
