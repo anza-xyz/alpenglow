@@ -28,6 +28,7 @@ pub struct DefaultThreadArgs {
     pub tvu_receive_threads: String,
     pub tvu_retransmit_threads: String,
     pub tvu_sigverify_threads: String,
+    pub tvu_bls_sigverify_threads: String,
 }
 
 impl Default for DefaultThreadArgs {
@@ -58,6 +59,7 @@ impl Default for DefaultThreadArgs {
             tvu_receive_threads: TvuReceiveThreadsArg::bounded_default().to_string(),
             tvu_retransmit_threads: TvuRetransmitThreadsArg::bounded_default().to_string(),
             tvu_sigverify_threads: TvuShredSigverifyThreadsArg::bounded_default().to_string(),
+            tvu_bls_sigverify_threads: TvuBlsSigverifyThreadsArg::bounded_default().to_string(),
         }
     }
 }
@@ -85,6 +87,7 @@ pub fn thread_args<'a>(defaults: &DefaultThreadArgs) -> Vec<Arg<'_, 'a>> {
         new_thread_arg::<TvuReceiveThreadsArg>(&defaults.tvu_receive_threads),
         new_thread_arg::<TvuRetransmitThreadsArg>(&defaults.tvu_retransmit_threads),
         new_thread_arg::<TvuShredSigverifyThreadsArg>(&defaults.tvu_sigverify_threads),
+        new_thread_arg::<TvuBlsSigverifyThreadsArg>(&defaults.tvu_bls_sigverify_threads),
     ]
 }
 
