@@ -411,6 +411,7 @@ pub struct ValidatorConfig {
     pub replay_forks_threads: NonZeroUsize,
     pub replay_transactions_threads: NonZeroUsize,
     pub tvu_shred_sigverify_threads: NonZeroUsize,
+    pub tvu_bls_sigverify_threads: NonZeroUsize,
     pub delay_leader_block_for_pending_fork: bool,
     pub use_tpu_client_next: bool,
     pub retransmit_xdp: Option<XdpConfig>,
@@ -494,6 +495,8 @@ impl ValidatorConfig {
             replay_forks_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             replay_transactions_threads: max_thread_count,
             tvu_shred_sigverify_threads: NonZeroUsize::new(get_thread_count())
+                .expect("thread count is non-zero"),
+            tvu_bls_sigverify_threads: NonZeroUsize::new(get_thread_count())
                 .expect("thread count is non-zero"),
             delay_leader_block_for_pending_fork: false,
             use_tpu_client_next: true,
@@ -1775,6 +1778,7 @@ impl Validator {
                 replay_forks_threads: config.replay_forks_threads,
                 replay_transactions_threads: config.replay_transactions_threads,
                 shred_sigverify_threads: config.tvu_shred_sigverify_threads,
+                bls_sigverify_threads: config.tvu_bls_sigverify_threads,
                 xdp_sender: xdp_sender.clone(),
             },
             &max_slots,

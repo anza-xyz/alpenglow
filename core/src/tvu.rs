@@ -133,6 +133,7 @@ pub struct TvuConfig {
     pub replay_forks_threads: NonZeroUsize,
     pub replay_transactions_threads: NonZeroUsize,
     pub shred_sigverify_threads: NonZeroUsize,
+    pub bls_sigverify_threads: NonZeroUsize,
     pub xdp_sender: Option<XdpSender>,
 }
 
@@ -147,6 +148,7 @@ impl Default for TvuConfig {
             replay_forks_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             replay_transactions_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             shred_sigverify_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
+            bls_sigverify_threads: NonZeroUsize::new(4).expect("4 is non-zero"),
             xdp_sender: None,
         }
     }
@@ -329,6 +331,7 @@ impl Tvu {
             alpenglow_last_voted.clone(),
             cluster_info.clone(),
             leader_schedule_cache.clone(),
+            tvu_config.bls_sigverify_threads.get(),
         );
 
         let mut key_notifiers = key_notifiers.write().unwrap();

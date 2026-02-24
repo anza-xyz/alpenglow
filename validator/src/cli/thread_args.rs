@@ -115,6 +115,7 @@ pub struct NumThreadConfig {
     pub tvu_receive_threads: NonZeroUsize,
     pub tvu_retransmit_threads: NonZeroUsize,
     pub tvu_sigverify_threads: NonZeroUsize,
+    pub tvu_bls_sigverify_threads: NonZeroUsize,
 }
 
 pub fn parse_num_threads_args(matches: &ArgMatches) -> NumThreadConfig {
@@ -183,6 +184,11 @@ pub fn parse_num_threads_args(matches: &ArgMatches) -> NumThreadConfig {
         tvu_sigverify_threads: value_t_or_exit!(
             matches,
             TvuShredSigverifyThreadsArg::NAME,
+            NonZeroUsize
+        ),
+        tvu_bls_sigverify_threads: value_t_or_exit!(
+            matches,
+            TvuBlsSigverifyThreadsArg::NAME,
             NonZeroUsize
         ),
     }
@@ -432,6 +438,18 @@ impl ThreadArg for TvuShredSigverifyThreadsArg {
     const LONG_NAME: &'static str = "tvu-shred-sigverify-threads";
     const HELP: &'static str =
         "Number of threads to use for performing signature verification of received shreds";
+
+    fn default() -> usize {
+        get_thread_count()
+    }
+}
+
+struct TvuBlsSigverifyThreadsArg;
+impl ThreadArg for TvuBlsSigverifyThreadsArg {
+    const NAME: &'static str = "tvu_bls_sigverify_threads";
+    const LONG_NAME: &'static str = "tvu-bls-sigverify-threads";
+    const HELP: &'static str =
+        "Number of threads to use for performing bls signature verification of received msgs";
 
     fn default() -> usize {
         get_thread_count()

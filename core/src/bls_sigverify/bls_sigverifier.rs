@@ -17,6 +17,7 @@ use {
         reward_certificate::AddVoteMessage,
     },
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    rayon::{ThreadPool, ThreadPoolBuilder},
     solana_bls_signatures::pubkey::PubkeyAffine as BlsPubkeyAffine,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
@@ -52,6 +53,7 @@ pub(crate) fn spawn_service(
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
+    num_threads: usize,
 ) -> thread::JoinHandle<()> {
     let verifier = SigVerifier::new(
         sharable_banks,
@@ -62,6 +64,7 @@ pub(crate) fn spawn_service(
         alpenglow_last_voted,
         cluster_info,
         leader_schedule,
+        num_threads,
     );
 
     Builder::new()
@@ -91,6 +94,8 @@ struct SigVerifier {
     leader_schedule: Arc<LeaderScheduleCache>,
     /// Buffer to collect votes to verify.  Stored here to reduce reallocations.
     votes_buffer: Vec<VoteToVerify>,
+    /// thread pool to use for all parallel tasks
+    thread_pool: ThreadPool,
 }
 
 impl SigVerifier {
@@ -103,7 +108,13 @@ impl SigVerifier {
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         cluster_info: Arc<ClusterInfo>,
         leader_schedule: Arc<LeaderScheduleCache>,
+        num_threads: usize,
     ) -> Self {
+        let thread_pool = ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .thread_name(|i| format!("solSigVerBLS{i:02}"))
+            .build()
+            .unwrap();
         Self {
             sharable_banks,
             channel_to_repair,
@@ -117,6 +128,7 @@ impl SigVerifier {
             cluster_info,
             leader_schedule,
             votes_buffer: Vec::new(),
+            thread_pool,
         }
     }
 
@@ -171,7 +183,7 @@ impl SigVerifier {
             .unwrap();
 
         let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
-        let (votes_result, certs_result) = rayon::join(
+        let (votes_result, certs_result) = self.thread_pool.join(
             || {
                 verify_and_send_votes(
                     votes_to_verify,
@@ -365,6 +377,7 @@ mod tests {
                 alpenglow_last_voted,
                 cluster_info,
                 leader_schedule,
+                4,
             ),
         )
     }
@@ -1222,6 +1235,7 @@ mod tests {
             Arc::new(AlpenglowLastVoted::default()),
             cluster_info,
             leader_schedule,
+            4,
         );
 
         let vote = Vote::new_skip_vote(2);
