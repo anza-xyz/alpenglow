@@ -8,6 +8,7 @@
 use {
     agave_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion},
+    rayon::{current_num_threads, ThreadPool, ThreadPoolBuilder},
     solana_bls_signatures::{Keypair as BLSKeypair, Pubkey as BLSPubkey, VerifiablePubkey},
     solana_core::bls_sigverify::{
         bls_vote_sigverify::{
@@ -24,6 +25,13 @@ use {
 
 static MESSAGE_COUNTS: &[usize] = &[1, 2, 4, 8, 16];
 static BATCH_SIZES: &[usize] = &[8, 16, 32, 64, 128];
+
+fn get_thread_pool() -> ThreadPool {
+    ThreadPoolBuilder::new()
+        .num_threads(current_num_threads())
+        .build()
+        .unwrap()
+}
 
 fn get_matrix_params() -> impl Iterator<Item = (usize, usize)> {
     BATCH_SIZES.iter().flat_map(|&batch_size| {
@@ -109,7 +117,13 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| verify_votes_optimistic(black_box(&votes), black_box(&mut stats)))
+            b.iter(|| {
+                verify_votes_optimistic(
+                    black_box(&votes),
+                    black_box(&mut stats),
+                    &get_thread_pool(),
+                )
+            })
         });
     }
     group.finish();
@@ -126,7 +140,13 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| aggregate_pubkeys_by_payload(black_box(&votes), black_box(&mut stats)))
+            b.iter(|| {
+                aggregate_pubkeys_by_payload(
+                    black_box(&votes),
+                    black_box(&mut stats),
+                    &get_thread_pool(),
+                )
+            })
         });
     }
     group.finish();
@@ -144,7 +164,7 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| aggregate_signatures(black_box(&votes)))
+            b.iter(|| aggregate_signatures(black_box(&votes), &get_thread_pool()))
         });
     }
     group.finish();
@@ -164,7 +184,13 @@ fn bench_verify_individual_votes(c: &mut Criterion) {
         group.bench_function(&label, |b| {
             b.iter_batched(
                 || votes.clone(),
-                |votes| verify_individual_votes(black_box(votes), black_box(&mut stats)),
+                |votes| {
+                    verify_individual_votes(
+                        black_box(votes),
+                        black_box(&mut stats),
+                        &get_thread_pool(),
+                    )
+                },
                 BatchSize::SmallInput,
             )
         });
