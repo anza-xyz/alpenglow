@@ -79,11 +79,9 @@ fn verify_certs(
     // of times we have to iterate over the list of certs.
 
     let (tx, rx) = unbounded();
-    thread_pool.scope(|s| {
-        s.spawn(|_| {
-            certs.into_par_iter().for_each_with(tx, |tx, cert| {
-                tx.send((verify_cert(&cert, bank), cert)).unwrap()
-            })
+    thread_pool.install(|| {
+        certs.into_par_iter().for_each_with(tx, |tx, cert| {
+            tx.send((verify_cert(&cert, bank), cert)).unwrap()
         })
     });
     rx.into_iter()
