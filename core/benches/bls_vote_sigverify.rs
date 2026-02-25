@@ -110,6 +110,7 @@ fn bench_verify_single_signature(c: &mut Criterion) {
 // Depends on both batch size and message distinctness due to pairing checks.
 fn bench_verify_votes_optimistic(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_optimistic");
+    let thread_pool = get_thread_pool();
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
@@ -121,7 +122,7 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
                 verify_votes_optimistic(
                     black_box(&votes),
                     black_box(&mut stats),
-                    &get_thread_pool(),
+                    black_box(&thread_pool),
                 )
             })
         });
@@ -133,6 +134,7 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
 // Depends on message distinctness because keys are grouped by messages.
 fn bench_aggregate_pubkeys(c: &mut Criterion) {
     let mut group = c.benchmark_group("aggregate_pubkeys");
+    let thread_pool = get_thread_pool();
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
@@ -144,7 +146,7 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
                 aggregate_pubkeys_by_payload(
                     black_box(&votes),
                     black_box(&mut stats),
-                    &get_thread_pool(),
+                    black_box(&thread_pool),
                 )
             })
         });
@@ -156,6 +158,7 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
 // Pure G1 addition - message distinctness is irrelevant.
 fn bench_aggregate_signatures(c: &mut Criterion) {
     let mut group = c.benchmark_group("aggregate_signatures");
+    let thread_pool = get_thread_pool();
 
     for &batch_size in BATCH_SIZES {
         // Use 1 distinct message just to generate valid data cheaply.
@@ -164,7 +167,7 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| aggregate_signatures(black_box(&votes), &get_thread_pool()))
+            b.iter(|| aggregate_signatures(black_box(&votes), black_box(&thread_pool)))
         });
     }
     group.finish();
@@ -174,6 +177,7 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
 // Message distinctness is irrelevant.
 fn bench_verify_individual_votes(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_fallback");
+    let thread_pool = get_thread_pool();
 
     for &batch_size in BATCH_SIZES {
         // Distinctness doesn't affect the cost of N individual verifications.
@@ -188,7 +192,7 @@ fn bench_verify_individual_votes(c: &mut Criterion) {
                     verify_individual_votes(
                         black_box(votes),
                         black_box(&mut stats),
-                        &get_thread_pool(),
+                        black_box(&thread_pool),
                     )
                 },
                 BatchSize::SmallInput,
