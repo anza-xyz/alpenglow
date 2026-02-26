@@ -6,7 +6,7 @@ use {
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
     solana_vote::vote_account::VoteAccount,
-    solana_vote_interface::state::{VoteStateV4, MAX_EPOCH_CREDITS_HISTORY},
+    solana_vote_interface::state::{VoteStateV4, VoteStateVersions, MAX_EPOCH_CREDITS_HISTORY},
     thiserror::Error,
 };
 
@@ -162,11 +162,23 @@ fn calculate_reward(
 fn pay_reward(epoch: Epoch, account: &VoteAccount, reward: u64) -> Option<AccountSharedData> {
     let data = account.account().data_clone();
     // TODO (akhi): this is a stop gap till we upstream.
-    let Ok(mut vote_state) = bincode::deserialize(&data) else {
+    let Ok(vote_state_versions) = bincode::deserialize(&data) else {
         return None;
     };
-    increment_credits(&mut vote_state, epoch, reward);
-    Some(AccountSharedData::new_data(account.lamports(), &vote_state, account.owner()).unwrap())
+    match vote_state_versions {
+        VoteStateVersions::V4(mut vote_state) => {
+            increment_credits(&mut vote_state, epoch, reward);
+            Some(
+                AccountSharedData::new_data(
+                    account.lamports(),
+                    &VoteStateVersions::V4(vote_state),
+                    account.owner(),
+                )
+                .unwrap(),
+            )
+        }
+        _ => None,
+    }
 }
 
 // TODO (akhi): this is a stop gap till we upstream.  We want to use the `VoteStateHandler` API.
@@ -235,5 +247,19 @@ mod tests {
         let credits = 543432;
         increment_credits(&mut vote_state, epoch, credits);
         assert_eq!(credits, vote_state.epoch_credits.last().unwrap().1);
+    }
+
+    #[test]
+    fn pay_reward_works() {
+        let account = VoteAccount::new_random_alpenglow();
+        let epoch = 1234;
+        let reward = 3453423;
+        let account_shared_data = pay_reward(epoch, &account, reward).unwrap();
+        let vote_state_versions: VoteStateVersions =
+            bincode::deserialize(&account_shared_data.data_clone()).unwrap();
+        let VoteStateVersions::V4(vote_state) = vote_state_versions else {
+            panic!();
+        };
+        assert_eq!(reward, vote_state.epoch_credits.last().unwrap().1);
     }
 }
