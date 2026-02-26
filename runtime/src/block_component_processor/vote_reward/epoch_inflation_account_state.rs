@@ -41,6 +41,20 @@ pub(crate) struct EpochInflationAccountState {
 }
 
 impl EpochInflationAccountState {
+    fn get_initial_state(current_epoch: Epoch, slots_per_epoch: u64) -> Self {
+        let current = EpochInflationState {
+            max_possible_validator_reward: 0,
+            slots_per_epoch,
+            epoch: current_epoch,
+        };
+        let prev = EpochInflationState {
+            max_possible_validator_reward: 0,
+            slots_per_epoch,
+            epoch: current_epoch.saturating_sub(1),
+        };
+        Self { current, prev }
+    }
+
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
     pub(super) fn new_from_bank(bank: &Bank) -> Self {
         match bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR) {
@@ -48,17 +62,8 @@ impl EpochInflationAccountState {
                 // this can happen in the first epoch when the account has not been created yet.
                 // we create a dummy state to handle this case with the assumption that this code
                 // will become active in an epoch before the epoch in which Alpenglow is activated.
-                let current = EpochInflationState {
-                    max_possible_validator_reward: 0,
-                    slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
-                    epoch: bank.epoch(),
-                };
-                let prev = EpochInflationState {
-                    max_possible_validator_reward: 0,
-                    slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
-                    epoch: bank.epoch().saturating_sub(1),
-                };
-                let state = Self { current, prev };
+                let state =
+                    Self::get_initial_state(bank.epoch(), bank.epoch_schedule.slots_per_epoch);
                 state.set_state(bank);
                 state
             }
@@ -151,32 +156,48 @@ impl EpochInflationAccountState {
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::bank::EpochInflationRewards, solana_genesis_config::GenesisConfig,
-        std::sync::Arc,
+        super::*, crate::bank::EpochInflationRewards, rand::Rng,
+        solana_genesis_config::GenesisConfig, std::sync::Arc,
     };
 
-    #[test]
-    fn serialization_works() {
-        let bank = Bank::new_for_tests(&GenesisConfig::default());
-        let state = EpochInflationAccountState {
+    fn get_rand_state() -> EpochInflationAccountState {
+        let mut rng = rand::thread_rng();
+        EpochInflationAccountState {
             prev: EpochInflationState {
-                max_possible_validator_reward: 23432,
-                slots_per_epoch: 2532,
-                epoch: 321,
+                max_possible_validator_reward: rng.gen(),
+                slots_per_epoch: rng.gen(),
+                epoch: rng.gen(),
             },
             current: EpochInflationState {
-                max_possible_validator_reward: 76463,
-                slots_per_epoch: 2346,
-                epoch: 2345,
+                max_possible_validator_reward: rng.gen(),
+                slots_per_epoch: rng.gen(),
+                epoch: rng.gen(),
             },
-        };
+        }
+    }
+
+    #[test]
+    fn new_from_bank_works() {
+        let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let expected = EpochInflationAccountState::get_initial_state(
+            bank.epoch(),
+            bank.epoch_schedule.slots_per_epoch,
+        );
+        let state = EpochInflationAccountState::new_from_bank(&bank);
+        assert_eq!(state, expected);
+    }
+
+    #[test]
+    fn set_state_works() {
+        let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let state = get_rand_state();
         state.set_state(&bank);
         let deserialized = EpochInflationAccountState::new_from_bank(&bank);
         assert_eq!(state, deserialized);
     }
 
     #[test]
-    fn epoch_update_works() {
+    fn new_epoch_update_account_works() {
         let bank = Bank::new_for_tests(&GenesisConfig::default());
         let first_slot_in_epoch_1 = bank.epoch_schedule().get_first_slot_in_epoch(1);
         let bank =
