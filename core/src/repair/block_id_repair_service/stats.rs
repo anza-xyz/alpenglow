@@ -49,6 +49,8 @@ pub(super) struct BlockIdRepairRequestsStats {
     pub parent_fec_set_count_requests: usize,
     pub fec_set_root_requests: usize,
     pub shred_for_block_id_requests: usize,
+
+    pub too_many_alternate_blocks: usize,
 }
 
 impl BlockIdRepairRequestsStats {
@@ -65,6 +67,11 @@ impl BlockIdRepairRequestsStats {
             (
                 "shred_for_block_id_requests",
                 self.shred_for_block_id_requests,
+                i64
+            ),
+            (
+                "too_many_alternate_blocks",
+                self.too_many_alternate_blocks,
                 i64
             ),
         );

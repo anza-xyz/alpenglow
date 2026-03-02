@@ -62,6 +62,7 @@ use {
 type OutstandingBlockIdRepairs = OutstandingRequests<BlockIdRepairType>;
 
 const MAX_REPAIR_REQUESTS_PER_ITERATION: usize = 200;
+const MAX_ALTERNATE_BLOCKS_PER_SLOT: usize = 11;
 
 /// The type of requests that this service will send
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -568,6 +569,21 @@ impl BlockIdRepairService {
                 // Note: when a block becomes full in blockstore -> we atomically calculate the DMR and populate location
                 if let Some(location) = blockstore.get_block_location(slot, block_id) {
                     Self::queue_fetch_parent_block(blockstore, slot, location, state);
+                    return;
+                }
+
+                // Sanity check: limit alternate blocks per slot
+                let alternate_blocks_count = state
+                    .requested_blocks
+                    .iter()
+                    .filter(|(s, _)| *s == slot)
+                    .count();
+                if alternate_blocks_count >= MAX_ALTERNATE_BLOCKS_PER_SLOT {
+                    error!(
+                        "{my_pubkey}: Too many alternate blocks for slot {slot}, ignoring \
+                         request for {block_id:?}"
+                    );
+                    state.request_stats.too_many_alternate_blocks += 1;
                     return;
                 }
 
@@ -1473,5 +1489,41 @@ mod tests {
         // Verify: No request was added (slot at root is ignored)
         assert!(state.pending_repair_requests.is_empty());
         assert!(!state.requested_blocks.contains(&(slot, block_id)));
+    }
+
+    #[test]
+    fn test_process_repair_event_too_many_alternate_blocks() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Arc::new(Blockstore::open(ledger_path.path()).unwrap());
+        let (mut state, bank_forks) = create_test_repair_state();
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+
+        let slot = 100u64;
+
+        // Fill up requested_blocks with MAX_ALTERNATE_BLOCKS_PER_SLOT blocks for this slot
+        for _ in 0..MAX_ALTERNATE_BLOCKS_PER_SLOT {
+            state.requested_blocks.insert((slot, Hash::new_unique()));
+        }
+
+        let new_block_id = Hash::new_unique();
+        let event = RepairEvent::FetchBlock {
+            slot,
+            block_id: new_block_id,
+        };
+
+        BlockIdRepairService::process_repair_event(
+            Pubkey::new_unique(),
+            event,
+            &sharable_banks,
+            &blockstore,
+            &mut state,
+        );
+
+        // Verify: No new request was added
+        assert!(state.pending_repair_requests.is_empty());
+        // Verify: new block was NOT added to requested_blocks
+        assert!(!state.requested_blocks.contains(&(slot, new_block_id)));
+        // Verify: stats were updated
+        assert_eq!(state.request_stats.too_many_alternate_blocks, 1);
     }
 }
