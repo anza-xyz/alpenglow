@@ -580,8 +580,8 @@ impl BlockIdRepairService {
                     .count();
                 if alternate_blocks_count >= MAX_ALTERNATE_BLOCKS_PER_SLOT {
                     error!(
-                        "{my_pubkey}: Too many alternate blocks for slot {slot}, ignoring \
-                         request for {block_id:?}"
+                        "{my_pubkey}: Too many alternate blocks for slot {slot}, ignoring request \
+                         for {block_id:?}"
                     );
                     state.request_stats.too_many_alternate_blocks += 1;
                     return;
