@@ -1,8 +1,8 @@
 use {
-    crate::bank::Bank,
+    crate::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     epoch_inflation_account_state::{EpochInflationAccountState, EpochInflationState},
     log::{error, info},
-    solana_account::AccountSharedData,
+    solana_account::{AccountSharedData, ReadableAccount},
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
     solana_vote::vote_account::VoteAccount,
@@ -53,7 +53,7 @@ pub(super) fn calculate_and_pay_voting_reward(
     };
 
     let current_slot = bank.slot();
-    let (reward_slot_accounts, reward_slot_total_stake) = {
+    let (reward_slot_accounts, reward_slot_total_stake, current_slot_leader_vote_pubkey) = {
         let epoch_stakes = bank.epoch_stakes_from_slot(reward_slot).ok_or(
             PayVoteRewardError::MissingEpochStakes {
                 reward_slot,
@@ -63,6 +63,7 @@ pub(super) fn calculate_and_pay_voting_reward(
         (
             epoch_stakes.stakes().vote_accounts().as_ref(),
             epoch_stakes.total_stake(),
+            convert_node_pubkey_to_vote_pubkey(epoch_stakes, *bank.collector_id()),
         )
     };
 
@@ -77,10 +78,9 @@ pub(super) fn calculate_and_pay_voting_reward(
         })?;
 
     let current_vote_accounts = bank.vote_accounts();
-    // Adding 1 to capacity on the off chance that the current leader was not in the aggregate.
+    // Adding 1 to capacity in case the current leader was not in the aggregate and paying it triggers a reallocation.
     let mut paid_vote_accounts = Vec::with_capacity(validators_to_reward.len().saturating_add(1));
     let mut total_leader_reward = 0u64;
-    let current_slot_leader = *bank.collector_id();
     let current_epoch = bank.epoch();
     for validator_to_reward in validators_to_reward {
         let (reward_slot_validator_stake, _) = reward_slot_accounts
@@ -97,7 +97,7 @@ pub(super) fn calculate_and_pay_voting_reward(
         );
         total_leader_reward = total_leader_reward.saturating_add(add_leader_reward);
 
-        if validator_to_reward == current_slot_leader {
+        if validator_to_reward == current_slot_leader_vote_pubkey {
             // current slot's leader.  We haven't finished calculating its reward yet.
             // Will be paid at the end.
             total_leader_reward = total_leader_reward.saturating_add(validator_reward);
@@ -117,18 +117,19 @@ pub(super) fn calculate_and_pay_voting_reward(
             }
         }
     }
-    match current_vote_accounts.get(&current_slot_leader) {
+    match current_vote_accounts.get(&current_slot_leader_vote_pubkey) {
         Some((_, leader_account)) => {
             if let Some(account_data) =
                 pay_reward(current_epoch, leader_account, total_leader_reward)
             {
-                paid_vote_accounts.push((current_slot_leader, account_data));
+                paid_vote_accounts.push((current_slot_leader_vote_pubkey, account_data));
             }
         }
         None => {
-            info!("Current slot {current_slot}'s leader's account {current_slot_leader} not found")
+            info!("Current slot {current_slot}'s leader's account {current_slot_leader_vote_pubkey} not found")
         }
     }
+
     bank.store_accounts((current_slot, paid_vote_accounts.as_slice()));
     Ok(())
 }
@@ -160,22 +161,23 @@ fn calculate_reward(
 }
 
 fn pay_reward(epoch: Epoch, account: &VoteAccount, reward: u64) -> Option<AccountSharedData> {
-    let data = account.account().data_clone();
+    let data = account.account().data();
     // TODO (akhi): this is a stop gap till we upstream.
-    let Ok(vote_state_versions) = bincode::deserialize(&data) else {
+    let Ok(vote_state_versions) = bincode::deserialize(data) else {
         return None;
     };
     match vote_state_versions {
         VoteStateVersions::V4(mut vote_state) => {
             increment_credits(&mut vote_state, epoch, reward);
-            Some(
-                AccountSharedData::new_data(
-                    account.lamports(),
-                    &VoteStateVersions::V4(vote_state),
-                    account.owner(),
-                )
-                .unwrap(),
-            )
+            let mut paid_account = AccountSharedData::new(
+                account.lamports(),
+                account.account().data().len(),
+                account.owner(),
+            );
+            paid_account
+                .serialize_data(&VoteStateVersions::V4(vote_state))
+                .ok()?;
+            Some(paid_account)
         }
         _ => None,
     }
@@ -212,11 +214,36 @@ fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
         .saturating_add(credits);
 }
 
+fn convert_node_pubkey_to_vote_pubkey(
+    epoch_stakes: &VersionedEpochStakes,
+    node_pubkey: Pubkey,
+) -> Pubkey {
+    let map = epoch_stakes.node_id_to_vote_accounts();
+    let node_vote_accounts = map.get(&node_pubkey).unwrap();
+    if node_vote_accounts.vote_accounts.len() != 1 {
+        unimplemented!();
+    }
+    node_vote_accounts.vote_accounts[0]
+}
+
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::bank::EpochInflationRewards, solana_genesis_config::GenesisConfig,
+        super::*,
+        crate::{
+            bank::EpochInflationRewards,
+            genesis_utils::{
+                create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
+            },
+        },
+        rand::seq::SliceRandom,
+        solana_account::ReadableAccount,
+        solana_epoch_schedule::EpochSchedule,
+        solana_genesis_config::GenesisConfig,
         solana_native_token::LAMPORTS_PER_SOL,
+        solana_signer::Signer,
+        solana_votor_messages::reward_certificate::NUM_SLOTS_FOR_REWARD,
+        std::sync::Arc,
     };
 
     #[test]
@@ -258,8 +285,50 @@ mod tests {
         let vote_state_versions: VoteStateVersions =
             bincode::deserialize(&account_shared_data.data_clone()).unwrap();
         let VoteStateVersions::V4(vote_state) = vote_state_versions else {
-            panic!();
+            panic!("unexpected state version: {vote_state_versions:?}");
         };
         assert_eq!(reward, vote_state.epoch_credits.last().unwrap().1);
+    }
+
+    #[test]
+    fn calculate_and_pay_works() {
+        let max_validators = 5;
+        let validator_keypairs = (0..max_validators)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            vec![100; validator_keypairs.len()],
+        )
+        .genesis_config;
+        genesis_config.epoch_schedule = EpochSchedule::without_warmup();
+
+        let leader_keypair = validator_keypairs.choose(&mut rand::thread_rng()).unwrap();
+        let leader_node_pubkey = leader_keypair.node_keypair.pubkey();
+        let leader_vote_pubkey = leader_keypair.vote_keypair.pubkey();
+
+        let bank = Arc::new(Bank::new_for_tests(&genesis_config));
+        let current_epoch = bank.epoch();
+        // TODO: using 100 for now to ensure both reward and current slot in same epoch.  Need to also test when they are in different epochs.
+        let current_slot = bank
+            .epoch_schedule
+            .get_first_slot_in_epoch(current_epoch + 1)
+            + 100;
+        let bank = Bank::new_from_parent(bank.clone(), &leader_node_pubkey, current_slot);
+        let reward_slot = current_slot - NUM_SLOTS_FOR_REWARD;
+
+        let validators_to_reward = vec![leader_vote_pubkey];
+
+        calculate_and_pay_voting_reward(&bank, Some((reward_slot, validators_to_reward))).unwrap();
+
+        let vote_accounts = bank.vote_accounts();
+        let (_, leader_account) = vote_accounts.get(&leader_vote_pubkey).unwrap();
+        let data = leader_account.account().data();
+        let vote_state_versions = bincode::deserialize(data).unwrap();
+        let VoteStateVersions::V4(vote_state) = vote_state_versions else {
+            panic!();
+        };
+        println!("vote_sttate credit: {:?}", vote_state.epoch_credits);
     }
 }
