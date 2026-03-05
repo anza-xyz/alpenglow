@@ -15,6 +15,7 @@ use {
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     solana_bls_signatures::{
+        hash::PreparedHashedMessage,
         pubkey::{PubkeyAffine as BlsPubkeyAffine, PubkeyProjective, VerifiablePubkey},
         signature::SignatureProjective,
         BlsError,
@@ -37,9 +38,9 @@ pub(super) struct VoteToVerify {
 }
 
 impl VoteToVerify {
-    fn verify_with_payload(&self, payload: &[u8]) -> bool {
+    fn verify_prepared(&self, prepared_hashed_message: &PreparedHashedMessage) -> bool {
         self.bls_pubkey
-            .verify_signature(&self.vote_message.signature, payload)
+            .verify_signature_prepared(&self.vote_message.signature, prepared_hashed_message)
             .is_ok()
     }
 }
@@ -383,16 +384,16 @@ fn verify_individual_votes(
     stats: &mut SigVerifyVoteStats,
 ) -> Vec<VoteToVerify> {
     let mut measure = Measure::start("verify_individual_votes");
-    let vote_payloads = build_vote_payloads(&votes_to_verify);
+    let vote_hashes = build_vote_hashes(&votes_to_verify);
 
     // Assuming that sigverifier's dedicated thread pool was used to call this function, the
     // following should run on that thread pool.
     let verified_votes: Vec<VoteToVerify> = votes_to_verify
         .into_par_iter()
         .filter_map(|vote| {
-            vote_payloads
+            vote_hashes
                 .get(&vote.vote_message.vote)
-                .filter(|payload| vote.verify_with_payload(payload))
+                .filter(|prepared_hashed_message| vote.verify_prepared(prepared_hashed_message))
                 .map(|_| vote)
         })
         .collect();
@@ -405,19 +406,19 @@ fn verify_individual_votes(
     verified_votes
 }
 
-fn build_vote_payloads(votes_to_verify: &[VoteToVerify]) -> HashMap<Vote, Vec<u8>> {
-    let mut payloads = HashMap::with_capacity(votes_to_verify.len());
+fn build_vote_hashes(votes_to_verify: &[VoteToVerify]) -> HashMap<Vote, PreparedHashedMessage> {
+    let mut vote_hashes = HashMap::with_capacity(votes_to_verify.len());
     for vote in votes_to_verify {
         let vote_value = vote.vote_message.vote;
-        if payloads.contains_key(&vote_value) {
+        if vote_hashes.contains_key(&vote_value) {
             continue;
         }
         let Ok(payload) = bincode::serialize(&vote_value) else {
             continue;
         };
-        payloads.insert(vote_value, payload);
+        vote_hashes.insert(vote_value, PreparedHashedMessage::new(&payload));
     }
-    payloads
+    vote_hashes
 }
 
 fn get_vote_payload(vote: &Vote) -> Vec<u8> {
@@ -447,13 +448,13 @@ mod tests {
     }
 
     #[test]
-    fn test_build_vote_payloads_empty() {
-        let payloads = build_vote_payloads(&[]);
-        assert!(payloads.is_empty());
+    fn test_build_vote_hashes_empty() {
+        let vote_hashes = build_vote_hashes(&[]);
+        assert!(vote_hashes.is_empty());
     }
 
     #[test]
-    fn test_build_vote_payloads_duplicate_votes_share_cache_entry() {
+    fn test_build_vote_hashes_duplicate_votes_share_cache_entry() {
         let signer0 = BlsKeypair::new();
         let signer1 = BlsKeypair::new();
         let vote = Vote::new_skip_vote(42);
@@ -462,16 +463,13 @@ mod tests {
             build_vote_to_verify(vote, &signer1),
         ];
 
-        let payloads = build_vote_payloads(&votes_to_verify);
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(
-            payloads.get(&vote),
-            Some(&bincode::serialize(&vote).expect("Failed to serialize vote"))
-        );
+        let vote_hashes = build_vote_hashes(&votes_to_verify);
+        assert_eq!(vote_hashes.len(), 1);
+        assert!(vote_hashes.contains_key(&vote));
     }
 
     #[test]
-    fn test_build_vote_payloads_multiple_distinct_entries() {
+    fn test_build_vote_hashes_multiple_distinct_entries() {
         let signer0 = BlsKeypair::new();
         let signer1 = BlsKeypair::new();
         let vote0 = Vote::new_skip_vote(11);
@@ -483,10 +481,10 @@ mod tests {
             build_vote_to_verify(vote2, &signer0),
         ];
 
-        let payloads = build_vote_payloads(&votes_to_verify);
-        assert_eq!(payloads.len(), 2);
-        assert!(payloads.contains_key(&vote0));
-        assert!(payloads.contains_key(&vote1));
+        let vote_hashes = build_vote_hashes(&votes_to_verify);
+        assert_eq!(vote_hashes.len(), 2);
+        assert!(vote_hashes.contains_key(&vote0));
+        assert!(vote_hashes.contains_key(&vote1));
     }
 
     #[test]
