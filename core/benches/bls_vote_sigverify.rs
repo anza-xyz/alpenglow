@@ -8,7 +8,7 @@
 use {
     agave_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion},
-    rayon::{current_num_threads, ThreadPool, ThreadPoolBuilder},
+    rayon::{ThreadPool, ThreadPoolBuilder},
     solana_bls_signatures::{Keypair as BLSKeypair, Pubkey as BLSPubkey, VerifiablePubkey},
     solana_core::bls_sigverify::{
         bls_vote_sigverify::{
@@ -27,8 +27,9 @@ static MESSAGE_COUNTS: &[usize] = &[1, 2, 4, 8, 16];
 static BATCH_SIZES: &[usize] = &[8, 16, 32, 64, 128];
 
 fn get_thread_pool() -> ThreadPool {
+    let num_threads = 4;
     ThreadPoolBuilder::new()
-        .num_threads(current_num_threads())
+        .num_threads(num_threads)
         .build()
         .unwrap()
 }
