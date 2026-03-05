@@ -573,18 +573,23 @@ impl BlockIdRepairService {
                 }
 
                 // Sanity check: limit alternate blocks per slot
-                let alternate_blocks_count = state
+                let alternate_blocks: Vec<_> = state
                     .requested_blocks
                     .iter()
                     .filter(|(s, _)| *s == slot)
-                    .count();
-                if alternate_blocks_count >= MAX_ALTERNATE_BLOCKS_PER_SLOT {
+                    .map(|(_, b)| b)
+                    .collect();
+
+                if alternate_blocks.len() >= MAX_ALTERNATE_BLOCKS_PER_SLOT {
                     error!(
                         "{my_pubkey}: Too many alternate blocks for slot {slot}, ignoring request \
-                         for {block_id:?}"
+                         for {block_id:?}, requested_blocks: {alternate_blocks:?}"
                     );
-                    state.request_stats.too_many_alternate_blocks += 1;
-                    return;
+                    datapoint_error!(
+                        "block_id_repair_service-too_many_alternate_blocks",
+                        ("slot", slot, i64),
+                        ("block_id", block_id.to_string(), String),
+                    );
                 }
 
                 // We don't have the block. Check if turbine failed (dead)
@@ -1523,7 +1528,5 @@ mod tests {
         assert!(state.pending_repair_requests.is_empty());
         // Verify: new block was NOT added to requested_blocks
         assert!(!state.requested_blocks.contains(&(slot, new_block_id)));
-        // Verify: stats were updated
-        assert_eq!(state.request_stats.too_many_alternate_blocks, 1);
     }
 }
