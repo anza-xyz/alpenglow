@@ -112,23 +112,18 @@ fn bench_verify_single_signature(c: &mut Criterion) {
 fn bench_verify_votes_optimistic(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_optimistic");
     let thread_pool = get_thread_pool();
+    let mut stats = SigVerifyVoteStats::default();
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let mut stats = SigVerifyVoteStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| {
-                verify_votes_optimistic(
-                    black_box(&votes),
-                    black_box(&mut stats),
-                    black_box(&thread_pool),
-                )
-            })
+            b.iter(|| verify_votes_optimistic(black_box(&votes), &mut stats, &thread_pool));
         });
     }
     group.finish();
+    black_box(stats);
 }
 
 // Public Key Aggregation
@@ -136,23 +131,20 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
 fn bench_aggregate_pubkeys(c: &mut Criterion) {
     let mut group = c.benchmark_group("aggregate_pubkeys");
     let thread_pool = get_thread_pool();
+    let mut stats = SigVerifyVoteStats::default();
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let mut stats = SigVerifyVoteStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
             b.iter(|| {
-                aggregate_pubkeys_by_payload(
-                    black_box(&votes),
-                    black_box(&mut stats),
-                    black_box(&thread_pool),
-                )
+                aggregate_pubkeys_by_payload(black_box(&votes), black_box(&mut stats), &thread_pool)
             })
         });
     }
     group.finish();
+    black_box(stats);
 }
 
 // Signature Aggregation
@@ -168,7 +160,7 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| aggregate_signatures(black_box(&votes), black_box(&thread_pool)))
+            b.iter(|| aggregate_signatures(black_box(&votes), &thread_pool))
         });
     }
     group.finish();
@@ -179,28 +171,25 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
 fn bench_verify_individual_votes(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_fallback");
     let thread_pool = get_thread_pool();
+    let mut stats = SigVerifyVoteStats::default();
 
     for &batch_size in BATCH_SIZES {
         // Distinctness doesn't affect the cost of N individual verifications.
         let votes = generate_test_data(1, batch_size);
-        let mut stats = SigVerifyVoteStats::default();
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
             b.iter_batched(
                 || votes.clone(),
                 |votes| {
-                    verify_individual_votes(
-                        black_box(votes),
-                        black_box(&mut stats),
-                        black_box(&thread_pool),
-                    )
+                    verify_individual_votes(black_box(votes), black_box(&mut stats), &thread_pool)
                 },
                 BatchSize::SmallInput,
             )
         });
     }
     group.finish();
+    black_box(stats);
 }
 
 criterion_group!(
