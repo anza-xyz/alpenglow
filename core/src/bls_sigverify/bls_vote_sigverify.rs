@@ -312,9 +312,9 @@ fn verify_votes_optimistic(
     } else {
         // if non-unique payload, we need to apply a pairing for each distinct message,
         // which is done inside `par_verify_distinct_aggregated`.
+        let payload_slices: Vec<&[u8]> =
+            distinct_payloads.par_iter().map(|p| p.as_slice()).collect();
         thread_pool.install(|| {
-            let payload_slices: Vec<&[u8]> =
-                distinct_payloads.par_iter().map(|p| p.as_slice()).collect();
             SignatureProjective::par_verify_distinct_aggregated(
                 &aggregate_pubkeys,
                 &aggregate_signature,
