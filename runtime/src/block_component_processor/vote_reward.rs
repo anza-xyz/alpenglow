@@ -60,10 +60,21 @@ pub(super) fn calculate_and_pay_voting_reward(
                 current_slot,
             },
         )?;
+        let current_slot_leader_vote_pubkey =
+            match convert_node_pubkey_to_vote_pubkey(epoch_stakes, *bank.collector_id()) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    info!(
+                        "Converting current slot leader's node pubkey to vote pubkey failed with \
+                         {e}.  It will not be paid"
+                    );
+                    None
+                }
+            };
         (
             epoch_stakes.stakes().vote_accounts().as_ref(),
             epoch_stakes.total_stake(),
-            convert_node_pubkey_to_vote_pubkey(epoch_stakes, *bank.collector_id()),
+            current_slot_leader_vote_pubkey,
         )
     };
 
@@ -97,7 +108,7 @@ pub(super) fn calculate_and_pay_voting_reward(
         );
         total_leader_reward = total_leader_reward.saturating_add(add_leader_reward);
 
-        if validator_to_reward == current_slot_leader_vote_pubkey {
+        if Some(validator_to_reward) == current_slot_leader_vote_pubkey {
             // current slot's leader.  We haven't finished calculating its reward yet.
             // Will be paid at the end.
             total_leader_reward = total_leader_reward.saturating_add(validator_reward);
@@ -117,19 +128,21 @@ pub(super) fn calculate_and_pay_voting_reward(
             }
         }
     }
-    match current_vote_accounts.get(&current_slot_leader_vote_pubkey) {
-        Some((_, leader_account)) => {
-            if let Some(account_data) =
-                pay_reward(current_epoch, leader_account, total_leader_reward)
-            {
-                paid_vote_accounts.push((current_slot_leader_vote_pubkey, account_data));
+    if let Some(pubkey) = current_slot_leader_vote_pubkey {
+        match current_vote_accounts.get(&pubkey) {
+            Some((_, leader_account)) => {
+                if let Some(account_data) =
+                    pay_reward(current_epoch, leader_account, total_leader_reward)
+                {
+                    paid_vote_accounts.push((pubkey, account_data));
+                }
             }
-        }
-        None => {
-            info!(
-                "Current slot {current_slot}'s leader's account {current_slot_leader_vote_pubkey} \
-                 not found"
-            )
+            None => {
+                info!(
+                    "Current slot {current_slot}'s leader's account {pubkey} not found.  It will \
+                     not be paid."
+                )
+            }
         }
     }
 
@@ -217,16 +230,32 @@ fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
         .saturating_add(credits);
 }
 
+#[derive(Debug, Error)]
+enum ConvertError {
+    #[error("failed to find node_vote_accounts for {node_pubkey}")]
+    NodeVoteAccountsNotFound { node_pubkey: Pubkey },
+    #[error(
+        "node pubkey should map to exactly {expected} vote account but maps to {got} accounts"
+    )]
+    VoteAccountsLenMismatch { expected: usize, got: usize },
+}
+
+/// Converts a `node_pubkey` to a `vote_pubkey`.
 fn convert_node_pubkey_to_vote_pubkey(
     epoch_stakes: &VersionedEpochStakes,
     node_pubkey: Pubkey,
-) -> Pubkey {
+) -> Result<Pubkey, ConvertError> {
     let map = epoch_stakes.node_id_to_vote_accounts();
-    let node_vote_accounts = map.get(&node_pubkey).unwrap();
+    let Some(node_vote_accounts) = map.get(&node_pubkey) else {
+        return Err(ConvertError::NodeVoteAccountsNotFound { node_pubkey });
+    };
     if node_vote_accounts.vote_accounts.len() != 1 {
-        unimplemented!();
+        return Err(ConvertError::VoteAccountsLenMismatch {
+            expected: 1,
+            got: node_vote_accounts.vote_accounts.len(),
+        });
     }
-    node_vote_accounts.vote_accounts[0]
+    Ok(node_vote_accounts.vote_accounts[0])
 }
 
 #[cfg(test)]
@@ -295,8 +324,9 @@ mod tests {
 
     #[test]
     fn calculate_and_pay_works() {
-        let max_validators = 5;
-        let validator_keypairs = (0..max_validators)
+        let num_validators = 100;
+        let num_validators_to_reward = 10;
+        let validator_keypairs = (0..num_validators)
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
@@ -307,9 +337,16 @@ mod tests {
         .genesis_config;
         genesis_config.epoch_schedule = EpochSchedule::without_warmup();
 
-        let leader_keypair = validator_keypairs.choose(&mut rand::thread_rng()).unwrap();
-        let leader_node_pubkey = leader_keypair.node_keypair.pubkey();
-        let leader_vote_pubkey = leader_keypair.vote_keypair.pubkey();
+        let validator_keypairs_to_reward = validator_keypairs
+            .choose_multiple(&mut rand::thread_rng(), num_validators_to_reward)
+            .collect::<Vec<_>>();
+
+        let validator_pubkeys_to_reward = validator_keypairs_to_reward
+            .iter()
+            .map(|v| v.vote_keypair.pubkey())
+            .collect::<Vec<_>>();
+        let leader_node_pubkey = validator_keypairs_to_reward[0].node_keypair.pubkey();
+        let leader_vote_pubkey = validator_keypairs_to_reward[0].vote_keypair.pubkey();
 
         let bank = Arc::new(Bank::new_for_tests(&genesis_config));
         let current_epoch = bank.epoch();
@@ -321,9 +358,8 @@ mod tests {
         let bank = Bank::new_from_parent(bank.clone(), &leader_node_pubkey, current_slot);
         let reward_slot = current_slot - NUM_SLOTS_FOR_REWARD;
 
-        let validators_to_reward = vec![leader_vote_pubkey];
-
-        calculate_and_pay_voting_reward(&bank, Some((reward_slot, validators_to_reward))).unwrap();
+        calculate_and_pay_voting_reward(&bank, Some((reward_slot, validator_pubkeys_to_reward)))
+            .unwrap();
 
         let vote_accounts = bank.vote_accounts();
         let (_, leader_account) = vote_accounts.get(&leader_vote_pubkey).unwrap();

@@ -31,7 +31,7 @@ pub(super) struct EpochInflationState {
 }
 
 impl EpochInflationState {
-    fn new(
+    fn new_from_bank(
         bank: &Bank,
         prev_epoch: Epoch,
         prev_epoch_capitalization: u64,
@@ -52,6 +52,14 @@ impl EpochInflationState {
             epoch: bank.epoch(),
         }
     }
+
+    fn new_empty(epoch: Epoch, slots_per_epoch: u64) -> Self {
+        Self {
+            max_possible_validator_reward: 0,
+            epoch,
+            slots_per_epoch,
+        }
+    }
 }
 
 /// The state stored in the off curve account used to store metadata for calculating and paying
@@ -66,16 +74,8 @@ pub(crate) struct EpochInflationAccountState {
 
 impl EpochInflationAccountState {
     fn get_initial_state(current_epoch: Epoch, slots_per_epoch: u64) -> Self {
-        let current = EpochInflationState {
-            max_possible_validator_reward: 0,
-            slots_per_epoch,
-            epoch: current_epoch,
-        };
-        let prev = EpochInflationState {
-            max_possible_validator_reward: 0,
-            slots_per_epoch,
-            epoch: current_epoch.saturating_sub(1),
-        };
+        let current = EpochInflationState::new_empty(current_epoch, slots_per_epoch);
+        let prev = EpochInflationState::new_empty(current_epoch.saturating_sub(1), slots_per_epoch);
         Self { current, prev }
     }
 
@@ -86,10 +86,7 @@ impl EpochInflationAccountState {
                 // this can happen in the first epoch when the account has not been created yet.
                 // we create a dummy state to handle this case with the assumption that this code
                 // will become active in an epoch before the epoch in which Alpenglow is activated.
-                let state =
-                    Self::get_initial_state(bank.epoch(), bank.epoch_schedule.slots_per_epoch);
-                state.set_state(bank);
-                state
+                Self::get_initial_state(bank.epoch(), bank.epoch_schedule.slots_per_epoch)
             }
             Some(acct) => {
                 // unwrap should be safe as the data being deserialized was serialized by us in
@@ -127,7 +124,7 @@ impl EpochInflationAccountState {
         additional_validator_rewards: u64,
     ) {
         let prev_state = Self::new_from_bank(bank);
-        let current = EpochInflationState::new(
+        let current = EpochInflationState::new_from_bank(
             bank,
             prev_epoch,
             prev_epoch_capitalization,
@@ -233,13 +230,13 @@ mod tests {
         assert_eq!(bank_epoch_1.epoch(), 1);
         assert_eq!(bank_epoch_2.epoch(), 2);
 
-        let expected_prev = EpochInflationState::new(
+        let expected_prev = EpochInflationState::new_from_bank(
             &bank_epoch_1,
             bank_epoch_0.epoch(),
             bank_epoch_0.capitalization(),
             0,
         );
-        let expected_current = EpochInflationState::new(
+        let expected_current = EpochInflationState::new_from_bank(
             &bank_epoch_2,
             bank_epoch_1.epoch(),
             bank_epoch_1.capitalization(),
