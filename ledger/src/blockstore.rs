@@ -378,6 +378,8 @@ struct ShredInsertionTracker<'a> {
     index_meta_time_us: u64,
     // Collection of recently completed data sets (data portion of erasure batch)
     newly_completed_data_sets: Vec<CompletedDataSetInfo>,
+    // Double merkle roots computed in the current batch for newly completed slots.
+    new_double_merkle_roots: HashMap<(BlockLocation, Slot), Hash>,
 }
 
 impl ShredInsertionTracker<'_> {
@@ -393,6 +395,7 @@ impl ShredInsertionTracker<'_> {
             write_batch,
             index_meta_time_us: 0,
             newly_completed_data_sets: vec![],
+            new_double_merkle_roots: HashMap::new(),
         }
     }
 }
@@ -1073,7 +1076,8 @@ impl Blockstore {
             if let Ok(Some(slot_meta)) = self.meta(slot) {
                 if slot_meta.is_full() {
                     match slot.cmp(&ending_slot) {
-                        cmp::Ordering::Less => next_slots.extend(slot_meta.next_slots),
+                        cmp::Ordering::Less => next_slots
+                            .extend(slot_meta.next_slots.into_iter().map(|(slot, _)| slot)),
                         _ => return true,
                     }
                 }
@@ -1464,14 +1468,18 @@ impl Blockstore {
                 continue;
             }
 
-            self.build_double_merkle_meta_in_batch(
+            if let Some(double_merkle_root) = self.build_double_merkle_meta_in_batch(
                 slot,
                 location,
                 meta.last_index.expect("Slot is full"),
                 &shred_insertion_tracker.parent_metas,
                 &shred_insertion_tracker.merkle_root_metas,
                 &mut shred_insertion_tracker.write_batch,
-            )?;
+            )? {
+                shred_insertion_tracker
+                    .new_double_merkle_roots
+                    .insert((location, slot), double_merkle_root);
+            }
         }
         Ok(())
     }
@@ -1483,74 +1491,54 @@ impl Blockstore {
     ) -> Result<()> {
         use solana_hash::Hash;
 
-        // for each newly completed slot, update any next_slots entries that reference it
-        for (&(location, slot), slot_meta_entry) in
-            shred_insertion_tracker.slot_meta_working_set.iter()
-        {
-            if !matches!(location, BlockLocation::Original) {
-                continue;
-            }
-
-            let meta = RefCell::borrow(&*slot_meta_entry.new_slot_meta);
-            if !is_newly_completed_slot(&meta, &slot_meta_entry.old_slot_meta) {
-                continue;
-            }
-
-            // get real block hash (double merkle root) for this slot
-            let block_hash = match self.get_double_merkle_root(slot, location) {
-                Some(hash) => hash,
-                None => {
-                    // Skip non-Alpenglow blocks
-                    continue;
+        let parent_updates: Vec<_> = shred_insertion_tracker
+            .new_double_merkle_roots
+            .iter()
+            .filter_map(|(&(location, slot), &block_hash)| {
+                if !matches!(location, BlockLocation::Original) {
+                    return None;
                 }
-            };
+                let parent_slot = shred_insertion_tracker
+                    .slot_meta_working_set
+                    .get(&(location, slot))?
+                    .new_slot_meta
+                    .borrow()
+                    .parent_slot?;
+                Some((parent_slot, slot, block_hash))
+            })
+            .collect();
 
-            // for each parent that has this slot in next_slots, update the hash
-            if let Some(parent_slot) = meta.parent_slot {
-                let mut parent_from_db = None;
-                let parent_ref = if let Some(parent_entry) =
-                    shred_insertion_tracker.slot_meta_working_set.get(&(BlockLocation::Original, parent_slot))
-                {
-                    &parent_entry.new_slot_meta
-                } else {
-                    // Parent not in working_set, fetch from DB
-                    parent_from_db = self.meta_cf.get(parent_slot)?;
-                    if let Some(ref parent_meta) = parent_from_db {
-                        // Store in working_set so it gets updated in the batch
-                        shred_insertion_tracker.slot_meta_working_set.insert(
-                            (BlockLocation::Original, parent_slot),
-                            SlotMetaWorkingSetEntry {
-                                new_slot_meta: Rc::new(RefCell::new(parent_meta.clone())),
-                                old_slot_meta: Some(parent_meta.clone()),
-                                did_insert_occur: false,
-                            },
-                        );
-                        shred_insertion_tracker
-                            .slot_meta_working_set
-                            .get(&(BlockLocation::Original, parent_slot))
-                            .unwrap()
-                            .new_slot_meta
-                            .borrow_mut()
-                    } else {
-                        continue; 
-                    }
-                };
-
-                // Update any entries to use the real hash
-                let parent_borrow = parent_ref.borrow();
-                let needs_update = parent_borrow
-                    .next_slots
-                    .iter()
-                    .any(|&(s, h)| s == slot && h == Hash::default());
-
-                if needs_update {
-                    drop(parent_borrow);
-                    let mut parent_mut = parent_ref.borrow_mut();
-                    for (child_slot, child_hash) in parent_mut.next_slots.iter_mut() {
-                        if *child_slot == slot && *child_hash == Hash::default() {
-                            *child_hash = block_hash;
+        for (parent_slot, slot, block_hash) in parent_updates {
+            let parent_entry = shred_insertion_tracker
+                .slot_meta_working_set
+                .entry((BlockLocation::Original, parent_slot))
+                .or_insert_with(|| {
+                    let parent_meta = self
+                        .meta_cf
+                        .get(parent_slot)
+                        .expect("Blockstore operations must succeed");
+                    let (new_slot_meta, old_slot_meta) = match parent_meta {
+                        Some(meta) => {
+                            let old_meta = meta.clone();
+                            (Rc::new(RefCell::new(meta)), Some(old_meta))
                         }
+                        None => (
+                            Rc::new(RefCell::new(SlotMeta::new_orphan(parent_slot))),
+                            None,
+                        ),
+                    };
+                    SlotMetaWorkingSetEntry {
+                        new_slot_meta,
+                        old_slot_meta,
+                        did_insert_occur: true,
                     }
+                });
+            parent_entry.did_insert_occur = true;
+
+            let mut parent_meta = parent_entry.new_slot_meta.borrow_mut();
+            for (child_slot, child_hash) in parent_meta.next_slots.iter_mut() {
+                if *child_slot == slot && *child_hash == Hash::default() {
+                    *child_hash = block_hash;
                 }
             }
         }
@@ -1568,7 +1556,7 @@ impl Blockstore {
         parent_metas: &HashMap<(BlockLocation, Slot), ParentMetaWorkingSetEntry>,
         merkle_root_metas: &HashMap<(BlockLocation, ErasureSetId), WorkingEntry<MerkleRootMeta>>,
         write_batch: &mut WriteBatch,
-    ) -> Result<()> {
+    ) -> Result<Option<Hash>> {
         let fec_set_count = (last_index / (DATA_SHREDS_PER_FEC_BLOCK as u64) + 1) as usize;
 
         // Get parent meta from tracker first, then fall back to db
@@ -1578,7 +1566,7 @@ impl Blockstore {
             // non alpenglow block
             assert!(matches!(location, BlockLocation::Original));
             trace!("Skipping dmr computation for {slot} {location}: Non Alpenglow block");
-            return Ok(());
+            return Ok(None);
         };
 
         // Collect merkle roots for each FEC set
@@ -1622,8 +1610,12 @@ impl Blockstore {
             proofs,
         };
 
-        self.double_merkle_meta_cf
-            .put_in_batch(write_batch, (slot, location), &double_merkle_meta)
+        self.double_merkle_meta_cf.put_in_batch(
+            write_batch,
+            (slot, location),
+            &double_merkle_meta,
+        )?;
+        Ok(Some(double_merkle_root))
     }
 
     /// Gets the merkle root from the tracker if available, otherwise from the db.
@@ -5660,9 +5652,12 @@ impl Blockstore {
         // Handle chaining for all the SlotMetas that were inserted into
         working_set.retain(|_, entry| entry.did_insert_occur);
         let mut new_chained_slots = HashMap::new();
-        let working_set_slots: Vec<_> = working_set.keys().collect();
-        for (location, slot) in working_set_slots {
-            self.handle_chaining_for_slot(write_batch, working_set, &mut new_chained_slots, *slot, *location)?;
+        let working_set_slots: Vec<_> = working_set
+            .keys()
+            .filter(|(location, _)| matches!(location, BlockLocation::Original))
+            .collect();
+        for (_, slot) in working_set_slots {
+            self.handle_chaining_for_slot(write_batch, working_set, &mut new_chained_slots, *slot)?;
         }
 
         // Handle chaining updates from dirty ParentMetas (UpdateParent overriding BlockHeader)
@@ -5698,9 +5693,6 @@ impl Blockstore {
     /// This function may update column family [`cf::Orphans`] and indirectly
     /// update SlotMeta from its output parameter `new_chained_slots`.
     ///
-    /// Note: This function now supports both `BlockLocation::Original` and
-    /// `BlockLocation::Alternate` since SlotMeta tracks (slot, hash) pairs.
-    ///
     /// Arguments:
     /// `db`: the underlying db for blockstore
     /// `write_batch`: the write batch which includes all the updates of the
@@ -5709,17 +5701,15 @@ impl Blockstore {
     /// `new_chained_slots`: an output parameter which includes all the slots
     ///   which connectivity have been updated.
     /// `slot`: the slot which we want to handle its chaining effect.
-    /// `location`: the block location (Original or Alternate)
     fn handle_chaining_for_slot(
         &self,
         write_batch: &mut WriteBatch,
         working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
         new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
         slot: Slot,
-        location: BlockLocation,
     ) -> Result<()> {
         let slot_meta_entry = working_set
-            .get(&(location, slot))
+            .get(&(BlockLocation::Original, slot))
             .expect("Slot must exist in the working_set hashmap");
 
         let meta = &slot_meta_entry.new_slot_meta;
@@ -6928,7 +6918,13 @@ pub mod tests {
             if i == num_slots - 1 {
                 assert!(meta.next_slots.is_empty());
             } else {
-                assert_eq!(meta.next_slots, vec![i + 1]);
+                assert_eq!(
+                    meta.next_slots
+                        .iter()
+                        .map(|(slot, _)| *slot)
+                        .collect::<Vec<_>>(),
+                    vec![i + 1]
+                );
             }
             if i == 0 {
                 assert_eq!(meta.parent_slot, Some(0));
@@ -6962,7 +6958,10 @@ pub mod tests {
                     // for the slot
                     assert_eq!(meta.last_index, ticks_per_slot - 2);
                     assert_eq!(meta.parent_slot, num_slots - 1);
-                    assert_eq!(meta.next_slots, vec![num_slots + 1]);
+                    assert_eq!(
+                        meta.next_slots.iter().map(|(slot, _)| *slot).collect::<Vec<_>>(),
+                        vec![num_slots + 1]
+                    );
                     assert_eq!(
                         &ticks[0..1],
                         &blockstore
@@ -7621,7 +7620,14 @@ pub mod tests {
         // Check the first slot again, it should chain to the second slot,
         // but still isn't connected.
         let meta1 = blockstore.meta(1).unwrap().unwrap();
-        assert_eq!(meta1.next_slots, vec![2]);
+        assert_eq!(
+            meta1
+                .next_slots
+                .iter()
+                .map(|(slot, _)| *slot)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
         assert!(!meta1.is_connected());
         assert_eq!(meta1.parent_slot, Some(0));
         assert_eq!(meta1.last_index, Some(shreds_per_slot as u64 - 1));
@@ -7633,7 +7639,13 @@ pub mod tests {
             let meta = blockstore.meta(slot).unwrap().unwrap();
             // The last slot will not chain to any other slots
             if slot != 2 {
-                assert_eq!(meta.next_slots, vec![slot + 1]);
+                assert_eq!(
+                    meta.next_slots
+                        .iter()
+                        .map(|(slot, _)| *slot)
+                        .collect::<Vec<_>>(),
+                    vec![slot + 1]
+                );
             }
             if slot == 0 {
                 assert_eq!(meta.parent_slot, Some(0));
@@ -7672,7 +7684,13 @@ pub mod tests {
             // - Have an unknown parent since no shreds to indicate
             let meta = blockstore.meta(slot).unwrap().unwrap();
             if slot % 2 == 0 {
-                assert_eq!(meta.next_slots, vec![slot + 1]);
+                assert_eq!(
+                    meta.next_slots
+                        .iter()
+                        .map(|(slot, _)| *slot)
+                        .collect::<Vec<_>>(),
+                    vec![slot + 1]
+                );
                 assert_eq!(meta.parent_slot, None);
             } else {
                 assert!(meta.next_slots.is_empty());
@@ -7692,7 +7710,13 @@ pub mod tests {
             let meta = blockstore.meta(slot).unwrap().unwrap();
             // All slots except the last one should have a slot in next_slots
             if slot != num_slots - 1 {
-                assert_eq!(meta.next_slots, vec![slot + 1]);
+                assert_eq!(
+                    meta.next_slots
+                        .iter()
+                        .map(|(slot, _)| *slot)
+                        .collect::<Vec<_>>(),
+                    vec![slot + 1]
+                );
             } else {
                 assert!(meta.next_slots.is_empty());
             }
@@ -7743,7 +7767,13 @@ pub mod tests {
             let meta = blockstore.meta(slot).unwrap().unwrap();
             // The last slot will not chain to any other slots
             if slot != num_slots - 1 {
-                assert_eq!(meta.next_slots, vec![slot + 1]);
+                assert_eq!(
+                    meta.next_slots
+                        .iter()
+                        .map(|(slot, _)| *slot)
+                        .collect::<Vec<_>>(),
+                    vec![slot + 1]
+                );
             } else {
                 assert!(meta.next_slots.is_empty());
             }
@@ -7772,7 +7802,13 @@ pub mod tests {
                     let meta = blockstore.meta(slot).unwrap().unwrap();
 
                     if slot != num_slots - 1 {
-                        assert_eq!(meta.next_slots, vec![slot + 1]);
+                        assert_eq!(
+                            meta.next_slots
+                                .iter()
+                                .map(|(slot, _)| *slot)
+                                .collect::<Vec<_>>(),
+                            vec![slot + 1]
+                        );
                     } else {
                         assert!(meta.next_slots.is_empty());
                     }
@@ -9405,10 +9441,24 @@ pub mod tests {
         shreds3.insert(0, shreds0[1].clone());
         blockstore.insert_shreds(shreds2, None, false).unwrap();
         let slot_meta = blockstore.meta(0).unwrap().unwrap();
-        assert_eq!(slot_meta.next_slots, vec![2]);
+        assert_eq!(
+            slot_meta
+                .next_slots
+                .iter()
+                .map(|(slot, _)| *slot)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
         blockstore.insert_shreds(shreds3, None, false).unwrap();
         let slot_meta = blockstore.meta(0).unwrap().unwrap();
-        assert_eq!(slot_meta.next_slots, vec![2, 3]);
+        assert_eq!(
+            slot_meta
+                .next_slots
+                .iter()
+                .map(|(slot, _)| *slot)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
     }
 
     #[test]
@@ -11882,7 +11932,14 @@ pub mod tests {
             .insert_shreds(unconfirmed_slot_shreds, None, false)
             .unwrap();
         assert_eq!(
-            blockstore.meta(confirmed_slot).unwrap().unwrap().next_slots,
+            blockstore
+                .meta(confirmed_slot)
+                .unwrap()
+                .unwrap()
+                .next_slots
+                .iter()
+                .map(|(slot, _)| *slot)
+                .collect::<Vec<_>>(),
             vec![unconfirmed_slot]
         );
     }
@@ -13692,7 +13749,6 @@ pub mod tests {
             (None, false) => panic!("Expected next_slots are not empty, but actual is None"),
         };
     }
-    }
 
     fn create_block_footer_shreds(slot: Slot, parent_slot: Slot, shred_index: u32) -> Vec<Shred> {
         let footer = BlockFooterV1 {
@@ -14144,53 +14200,70 @@ pub mod tests {
 
     #[test]
     fn test_update_parent_with_equivocation() {
-        // Test the core issue from #673: when a block in a slot changes parent via UpdateParent,
-        // we should only remove that specific block from the old parent's next_slots,
-        // not all references to that slot.
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
-        // Create parent slot 0
-        let (shreds, _) = make_slot_entries(0, 0, 5);
-        blockstore.insert_shreds(shreds, None, true).unwrap();
+        let slot = 10;
+        let old_parent = 0;
+        let new_parent = 5;
+        let original_block_hash = Hash::new_unique();
+        let alternate_block_hash = Hash::new_unique();
 
-        // For simplicity, we'll test with a single block first:
-        // - Block A in slot 10 initially has parent 0
-        // - UpdateParent changes block A's parent from 0 to 5
-        // - Verify slot 0's next_slots no longer contains block A
-        // - Verify slot 5's next_slots now contains block A
-
-        let block_a_hash = Hash::new_unique();
-        let (shreds, _) = make_slot_entries(10, 0, 5);
-        blockstore.insert_shreds(shreds, None, true).unwrap();
-
-        // Verify initial state: slot 10 has parent 0
-        let meta_10 = blockstore.meta(10).unwrap().unwrap();
-        assert_eq!(meta_10.parent_slot, Some(0));
-        verify_next_slots(&blockstore, 0, &[10]);
-
-        // Create slot 5 and make it full/connected
-        let (shreds, _) = make_slot_entries(5, 0, 5);
-        blockstore.insert_shreds(shreds, None, true).unwrap();
-
-        // UpdateParent: change slot 10's parent from 0 to 5
         blockstore
-            .insert_shreds(
-                create_update_parent_shreds(10, 5, block_a_hash, 32, true),
-                None,
-                true,
+            .meta_cf
+            .put(
+                old_parent,
+                &SlotMeta {
+                    slot: old_parent,
+                    next_slots: vec![(slot, original_block_hash), (slot, alternate_block_hash)],
+                    ..SlotMeta::new(old_parent, Some(old_parent))
+                },
             )
             .unwrap();
+        blockstore
+            .meta_cf
+            .put(new_parent, &SlotMeta::new(new_parent, Some(old_parent)))
+            .unwrap();
+        blockstore
+            .meta_cf
+            .put(slot, &SlotMeta::new(slot, Some(old_parent)))
+            .unwrap();
+        blockstore
+            .set_double_merkle_root(slot, BlockLocation::Original, original_block_hash)
+            .unwrap();
 
-        // Verify final state
-        let meta_10 = blockstore.meta(10).unwrap().unwrap();
-        assert_eq!(meta_10.parent_slot, Some(5));
+        let working_set = HashMap::new();
+        let parent_metas = HashMap::from([(
+            (BlockLocation::Original, slot),
+            ParentMetaWorkingSetEntry {
+                parent_meta: Some(WorkingEntry::Dirty(ParentMeta {
+                    parent_slot: new_parent,
+                    parent_block_id: Hash::new_unique(),
+                    replay_fec_set_index: 32,
+                })),
+                fetched_from_blockstore: true,
+            },
+        )]);
+        let mut new_chained_slots = HashMap::new();
 
-        // Slot 0 should no longer have slot 10 as a child
-        verify_next_slots(&blockstore, 0, &[]);
+        blockstore
+            .update_chaining_for_parent_metas(&working_set, &parent_metas, &mut new_chained_slots)
+            .unwrap();
 
-        // Slot 5 should now have slot 10 as a child
-        verify_next_slots(&blockstore, 5, &[10]);
+        let old_parent_meta = new_chained_slots.get(&old_parent).unwrap().borrow().clone();
+        assert_eq!(
+            old_parent_meta.next_slots,
+            vec![(slot, alternate_block_hash)]
+        );
+
+        let new_parent_meta = new_chained_slots.get(&new_parent).unwrap().borrow().clone();
+        assert_eq!(
+            new_parent_meta.next_slots,
+            vec![(slot, original_block_hash)]
+        );
+
+        let slot_meta = new_chained_slots.get(&slot).unwrap().borrow().clone();
+        assert_eq!(slot_meta.parent_slot, Some(new_parent));
     }
 
     #[test]
