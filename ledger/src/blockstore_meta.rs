@@ -152,9 +152,10 @@ pub struct SlotMetaBase<T> {
     /// The parent slot of the head of a detached chain of slots is None.
     #[serde(with = "serde_compat")]
     pub parent_slot: Option<Slot>,
-    /// The list of slots, each of which contains a block that derives
-    /// from this one.
-    pub next_slots: Vec<Slot>,
+    /// The list of (slot, block_hash) pairs, each of which contains a block that derives
+    /// from this one. The block_hash identifies the specific block version within the slot,
+    /// which is necessary to handle equivocation correctly.
+    pub next_slots: Vec<(Slot, Hash)>,
     /// Connected status flags of this slot
     pub connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
@@ -197,6 +198,43 @@ impl From<SlotMetaV2> for SlotMetaV1 {
     }
 }
 
+/// SlotMetaV3 includes block hashes in next_slots to properly handle equivocation.
+/// This is a breaking change from V1/V2 which only tracked slot numbers.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct SlotMetaV3 {
+    pub slot: Slot,
+    pub consumed: u64,
+    pub received: u64,
+    pub first_shred_timestamp: u64,
+    #[serde(with = "serde_compat")]
+    pub last_index: Option<u64>,
+    #[serde(with = "serde_compat")]
+    pub parent_slot: Option<Slot>,
+    pub next_slots: Vec<(Slot, Hash)>,
+    pub connected_flags: ConnectedFlags,
+    pub completed_data_indexes: CompletedDataIndexesV2,
+}
+
+impl From<SlotMetaV2> for SlotMetaV3 {
+    fn from(value: SlotMetaV2) -> Self {
+        SlotMetaV3 {
+            slot: value.slot,
+            consumed: value.consumed,
+            received: value.received,
+            first_shred_timestamp: value.first_shred_timestamp,
+            last_index: value.last_index,
+            parent_slot: value.parent_slot,
+            next_slots: value
+                .next_slots
+                .into_iter()
+                .map(|slot| (slot, Hash::default()))
+                .collect(),
+            connected_flags: value.connected_flags,
+            completed_data_indexes: value.completed_data_indexes,
+        }
+    }
+}
+
 // We need to maintain both formats during migration,
 // as both formats will need to be supported when reading
 // from rocksdb until the migration is complete.
@@ -206,20 +244,20 @@ impl From<SlotMetaV2> for SlotMetaV1 {
 // For example, to enable the new format,
 //
 // ```
-// pub type SlotMeta = SlotMetaV2;
+// pub type SlotMeta = SlotMetaV3;
 // pub type CompletedDataIndexes = CompletedDataIndexesV2;
-// pub type SlotMetaFallback = SlotMetaV1;
+// pub type SlotMetaFallback = SlotMetaV2;
 // ```
 //
 // To enable the old format,
 //
 // ```
-// pub type SlotMeta = SlotMetaV1;
-// pub type CompletedDataIndexes = CompletedDataIndexesV1;
-// pub type SlotMetaFallback = SlotMetaV2;
+// pub type SlotMeta = SlotMetaV2;
+// pub type CompletedDataIndexes = CompletedDataIndexesV2;
+// pub type SlotMetaFallback = SlotMetaV3;
 // ```
-pub type SlotMeta = SlotMetaV1;
-pub type CompletedDataIndexes = CompletedDataIndexesV1;
+pub type SlotMeta = SlotMetaV3;
+pub type CompletedDataIndexes = CompletedDataIndexesV2;
 pub type SlotMetaFallback = SlotMetaV2;
 
 pub(crate) fn deserialize_slot_meta(data: &[u8]) -> Result<SlotMeta, BlockstoreError> {
@@ -1339,14 +1377,16 @@ mod test {
 
     #[test]
     fn test_clear_unconfirmed_slot() {
+        use solana_hash::Hash;
+
         let mut slot_meta = SlotMeta::new_orphan(5);
         slot_meta.consumed = 5;
         slot_meta.received = 5;
-        slot_meta.next_slots = vec![6, 7];
+        slot_meta.next_slots = vec![(6, Hash::default()), (7, Hash::default())];
         slot_meta.clear_unconfirmed_slot();
 
         let mut expected = SlotMeta::new_orphan(5);
-        expected.next_slots = vec![6, 7];
+        expected.next_slots = vec![(6, Hash::default()), (7, Hash::default())];
         assert_eq!(slot_meta, expected);
     }
 
