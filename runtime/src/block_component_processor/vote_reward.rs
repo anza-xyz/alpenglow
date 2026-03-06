@@ -126,7 +126,10 @@ pub(super) fn calculate_and_pay_voting_reward(
             }
         }
         None => {
-            info!("Current slot {current_slot}'s leader's account {current_slot_leader_vote_pubkey} not found")
+            info!(
+                "Current slot {current_slot}'s leader's account {current_slot_leader_vote_pubkey} \
+                 not found"
+            )
         }
     }
 
