@@ -101,7 +101,8 @@ fn bench_verify_single_signature(c: &mut Criterion) {
         b.iter(|| {
             // We use the raw verify method from the underlying library
             // to establish the cryptographic floor.
-            pubkey.verify_signature(black_box(&sig), black_box(msg))
+            let res = pubkey.verify_signature(black_box(&sig), black_box(msg));
+            black_box(res).unwrap();
         })
     });
     group.finish();
@@ -119,7 +120,10 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| verify_votes_optimistic(black_box(&votes), &mut stats, &thread_pool));
+            b.iter(|| {
+                let res = verify_votes_optimistic(black_box(&votes), &mut stats, &thread_pool);
+                black_box(res);
+            })
         });
     }
     group.finish();
@@ -139,7 +143,8 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
 
         group.bench_function(&label, |b| {
             b.iter(|| {
-                aggregate_pubkeys_by_payload(black_box(&votes), black_box(&mut stats), &thread_pool)
+                let res = aggregate_pubkeys_by_payload(black_box(&votes), &mut stats, &thread_pool);
+                black_box(res).1.unwrap();
             })
         });
     }
@@ -160,7 +165,10 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| aggregate_signatures(black_box(&votes), &thread_pool))
+            b.iter(|| {
+                let res = aggregate_signatures(black_box(&votes), &thread_pool);
+                black_box(res).unwrap();
+            })
         });
     }
     group.finish();
@@ -182,7 +190,8 @@ fn bench_verify_individual_votes(c: &mut Criterion) {
             b.iter_batched(
                 || votes.clone(),
                 |votes| {
-                    verify_individual_votes(black_box(votes), black_box(&mut stats), &thread_pool)
+                    let res = verify_individual_votes(black_box(votes), &mut stats, &thread_pool);
+                    black_box(res);
                 },
                 BatchSize::SmallInput,
             )
