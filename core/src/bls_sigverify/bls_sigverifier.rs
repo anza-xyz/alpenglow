@@ -195,6 +195,7 @@ impl SigVerifier {
                     &self.channel_to_reward,
                     &self.channel_to_metrics,
                     &mut last_voted_slots,
+                    &self.thread_pool,
                 )
             },
             || {
@@ -203,6 +204,7 @@ impl SigVerifier {
                     certs_to_verify,
                     &root_bank,
                     &self.channel_to_pool,
+                    &self.thread_pool,
                 )
             },
         );

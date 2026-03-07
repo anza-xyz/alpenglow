@@ -6,7 +6,10 @@ use {
         fraction::Fraction,
     },
     crossbeam_channel::{unbounded, Sender, TrySendError},
-    rayon::iter::{IntoParallelIterator, ParallelIterator},
+    rayon::{
+        iter::{IntoParallelIterator, ParallelIterator},
+        ThreadPool,
+    },
     solana_measure::measure::Measure,
     solana_runtime::bank::Bank,
     std::{collections::HashSet, num::NonZeroU64},
@@ -35,6 +38,7 @@ pub(super) fn verify_and_send_certificates(
     certs: Vec<Certificate>,
     bank: &Bank,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
+    thread_pool: &ThreadPool,
 ) -> Result<SigVerifyCertStats, SigVerifyCertError> {
     for cert in certs.iter() {
         debug_assert!(!verified_certs_set.contains(&cert.cert_type));
@@ -47,7 +51,7 @@ pub(super) fn verify_and_send_certificates(
     }
 
     stats.certs_to_sig_verify += certs.len() as u64;
-    let messages = verify_certs(verified_certs_set, certs, bank, &mut stats);
+    let messages = verify_certs(verified_certs_set, certs, bank, &mut stats, thread_pool);
     stats.sig_verified_certs += messages.len() as u64;
     send_certs_to_pool(messages, channel_to_pool, &mut stats)?;
 
@@ -68,17 +72,16 @@ fn verify_certs(
     certs: Vec<Certificate>,
     bank: &Bank,
     stats: &mut SigVerifyCertStats,
+    thread_pool: &ThreadPool,
 ) -> Vec<ConsensusMessage> {
     // We want to verify the certs in parallel however collecting them and inserting them into the
     // set has to happen sequentially.  Following allows us to do that while minimising the number
     // of times we have to iterate over the list of certs.
 
     let (tx, rx) = unbounded();
-    rayon::scope(|s| {
-        s.spawn(|_| {
-            certs.into_par_iter().for_each_with(tx, |tx, cert| {
-                tx.send((verify_cert(&cert, bank), cert)).unwrap()
-            })
+    thread_pool.install(|| {
+        certs.into_par_iter().for_each_with(tx, |tx, cert| {
+            tx.send((verify_cert(&cert, bank), cert)).unwrap()
         })
     });
     rx.into_iter()

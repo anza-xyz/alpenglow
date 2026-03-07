@@ -13,7 +13,11 @@ use {
         vote::Vote,
     },
     crossbeam_channel::{Sender, TrySendError},
-    rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
+    rayon::{
+        current_thread_index,
+        iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
+        ThreadPool,
+    },
     solana_bls_signatures::{
         pubkey::{PubkeyAffine as BlsPubkeyAffine, PubkeyProjective, VerifiablePubkey},
         signature::SignatureProjective,
@@ -63,6 +67,7 @@ pub(super) fn verify_and_send_votes(
     channel_to_reward: &Sender<AddVoteMessage>,
     channel_to_metrics: &ConsensusMetricsEventSender,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
+    thread_pool: &ThreadPool,
 ) -> Result<(Vec<VoteToVerify>, SigVerifyVoteStats), SigVerifyVoteError> {
     let mut measure = Measure::start("verify_and_send_votes");
     let mut stats = SigVerifyVoteStats::default();
@@ -70,7 +75,7 @@ pub(super) fn verify_and_send_votes(
         return Ok((votes_to_verify, stats));
     }
     stats.votes_to_sig_verify += votes_to_verify.len() as u64;
-    let verified_votes = verify_votes(votes_to_verify, &mut stats);
+    let verified_votes = verify_votes(votes_to_verify, &mut stats, thread_pool);
     stats.sig_verified_votes += verified_votes.len() as u64;
 
     let (votes_for_pool, msgs_for_repair, msg_for_reward, msg_for_metrics) = process_verified_votes(
@@ -258,20 +263,22 @@ fn send_votes_to_repair(
 fn verify_votes(
     votes_to_verify: Vec<VoteToVerify>,
     stats: &mut SigVerifyVoteStats,
+    thread_pool: &ThreadPool,
 ) -> Vec<VoteToVerify> {
     // Try optimistic verification - fast to verify, but cannot identify invalid votes
-    if verify_votes_optimistic(&votes_to_verify, stats) {
+    if verify_votes_optimistic(&votes_to_verify, stats, thread_pool) {
         return votes_to_verify;
     }
 
     // Fallback to individual verification
-    verify_individual_votes(votes_to_verify, stats)
+    verify_individual_votes(votes_to_verify, stats, thread_pool)
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_votes_optimistic(
     votes_to_verify: &[VoteToVerify],
     stats: &mut SigVerifyVoteStats,
+    thread_pool: &ThreadPool,
 ) -> bool {
     let mut measure = Measure::start("verify_votes_optimistic");
 
@@ -284,10 +291,7 @@ fn verify_votes_optimistic(
     //
     // By verifying the aggregated signature against the aggregated public keys,
     // the number of pairings required is reduced to (1 + number of distinct messages).
-    //
-    // Assuming that sigverifier's dedicated thread pool was used to call this function, the
-    // following should run on that thread pool.
-    let (signature_result, (distinct_payloads, pubkeys_result)) = rayon::join(
+    let (signature_result, (distinct_payloads, pubkeys_result)) = thread_pool.join(
         || aggregate_signatures(votes_to_verify),
         || aggregate_pubkeys_by_payload(votes_to_verify, stats),
     );
@@ -309,17 +313,15 @@ fn verify_votes_optimistic(
     } else {
         // if non-unique payload, we need to apply a pairing for each distinct message,
         // which is done inside `par_verify_distinct_aggregated`.
-        //
-        // Assuming that sigverifier's dedicated thread pool was used to call this function, the
-        // following should run on that thread pool.
-        let payload_slices: Vec<&[u8]> =
-            distinct_payloads.par_iter().map(|p| p.as_slice()).collect();
-        SignatureProjective::par_verify_distinct_aggregated(
-            &aggregate_pubkeys,
-            &aggregate_signature,
-            &payload_slices,
-        )
-        .is_ok()
+        let payload_slices: Vec<&[u8]> = distinct_payloads.iter().map(|p| p.as_slice()).collect();
+        thread_pool.install(|| {
+            SignatureProjective::par_verify_distinct_aggregated(
+                &aggregate_pubkeys,
+                &aggregate_signature,
+                &payload_slices,
+            )
+            .is_ok()
+        })
     };
 
     measure.stop();
@@ -330,10 +332,9 @@ fn verify_votes_optimistic(
     verified
 }
 
-// Assuming that sigverifier's dedicated thread pool was used to call this function, the
-// following should run on that thread pool.
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, BlsError> {
+    debug_assert!(current_thread_index().is_some());
     let signatures = votes.par_iter().map(|v| &v.vote_message.signature);
     // TODO(sam): Currently, `par_aggregate` performs full validation
     // (on-curve + subgroup check) for every signature. Since the subgroup
@@ -350,6 +351,7 @@ fn aggregate_pubkeys_by_payload(
     votes: &[VoteToVerify],
     stats: &mut SigVerifyVoteStats,
 ) -> (Vec<Vec<u8>>, Result<Vec<PubkeyProjective>, BlsError>) {
+    debug_assert!(current_thread_index().is_some());
     let mut grouped_votes: HashMap<&Vote, Vec<&BlsPubkeyAffine>> = HashMap::new();
 
     for v in votes {
@@ -364,8 +366,6 @@ fn aggregate_pubkeys_by_payload(
         .increment(grouped_votes.len() as u64)
         .unwrap();
 
-    // Assuming that sigverifier's dedicated thread pool was used to call this function, the
-    // following should run on that thread pool.
     let (distinct_payloads, distinct_pubkeys_results): (Vec<_>, Vec<_>) = grouped_votes
         .into_par_iter()
         .map(|(vote, pubkeys)| {
@@ -384,16 +384,15 @@ fn aggregate_pubkeys_by_payload(
 fn verify_individual_votes(
     votes_to_verify: Vec<VoteToVerify>,
     stats: &mut SigVerifyVoteStats,
+    thread_pool: &ThreadPool,
 ) -> Vec<VoteToVerify> {
     let mut measure = Measure::start("verify_individual_votes");
-
-    // Assuming that sigverifier's dedicated thread pool was used to call this function, the
-    // following should run on that thread pool.
-    let verified_votes: Vec<VoteToVerify> = votes_to_verify
-        .into_par_iter()
-        .filter_map(|vote| vote.verify().then_some(vote))
-        .collect();
-
+    let verified_votes = thread_pool.install(|| {
+        votes_to_verify
+            .into_par_iter()
+            .filter_map(|vote| vote.verify().then_some(vote))
+            .collect()
+    });
     measure.stop();
     stats
         .fn_verify_individual_votes_stats
@@ -404,4 +403,27 @@ fn verify_individual_votes(
 
 fn get_vote_payload(vote: &Vote) -> Vec<u8> {
     bincode::serialize(vote).expect("Failed to serialize vote")
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn ensure_aggregate_signatures_runs_on_thread_pool() {
+        let votes = vec![];
+        // calling without a rayon thread pool should trigger a debug assert.
+        aggregate_signatures(&votes).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn ensure_aggregate_pubkeys_by_payload_runs_on_thread_pool() {
+        let votes = vec![];
+        let mut stats = SigVerifyVoteStats::default();
+        // calling without a rayon thread pool should trigger a debug assert.
+        aggregate_pubkeys_by_payload(&votes, &mut stats).1.unwrap();
+    }
 }
