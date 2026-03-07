@@ -14,6 +14,7 @@ use {
     },
     crossbeam_channel::{Sender, TrySendError},
     rayon::{
+        current_thread_index,
         iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
         ThreadPool,
     },
@@ -291,8 +292,8 @@ fn verify_votes_optimistic(
     // By verifying the aggregated signature against the aggregated public keys,
     // the number of pairings required is reduced to (1 + number of distinct messages).
     let (signature_result, (distinct_payloads, pubkeys_result)) = thread_pool.join(
-        || aggregate_signatures(votes_to_verify, thread_pool),
-        || aggregate_pubkeys_by_payload(votes_to_verify, stats, thread_pool),
+        || aggregate_signatures(votes_to_verify),
+        || aggregate_pubkeys_by_payload(votes_to_verify, stats),
     );
 
     let Ok(aggregate_signature) = signature_result else {
@@ -312,8 +313,7 @@ fn verify_votes_optimistic(
     } else {
         // if non-unique payload, we need to apply a pairing for each distinct message,
         // which is done inside `par_verify_distinct_aggregated`.
-        let payload_slices: Vec<&[u8]> =
-            distinct_payloads.par_iter().map(|p| p.as_slice()).collect();
+        let payload_slices: Vec<&[u8]> = distinct_payloads.iter().map(|p| p.as_slice()).collect();
         thread_pool.install(|| {
             SignatureProjective::par_verify_distinct_aggregated(
                 &aggregate_pubkeys,
@@ -333,20 +333,16 @@ fn verify_votes_optimistic(
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-fn aggregate_signatures(
-    votes: &[VoteToVerify],
-    thread_pool: &ThreadPool,
-) -> Result<SignatureProjective, BlsError> {
-    thread_pool.install(|| {
-        let signatures = votes.par_iter().map(|v| &v.vote_message.signature);
-        // TODO(sam): Currently, `par_aggregate` performs full validation
-        // (on-curve + subgroup check) for every signature. Since the subgroup
-        // check is expensive, we can use an `unchecked` deserialization here
-        // (performing only the cheap on-curve check) and rely on a single subgroup
-        // check on the final aggregated signature. This should save more than 80%
-        // of the time for signature aggregation.
-        SignatureProjective::par_aggregate(signatures)
-    })
+fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, BlsError> {
+    debug_assert!(current_thread_index().is_some());
+    let signatures = votes.par_iter().map(|v| &v.vote_message.signature);
+    // TODO(sam): Currently, `par_aggregate` performs full validation
+    // (on-curve + subgroup check) for every signature. Since the subgroup
+    // check is expensive, we can use an `unchecked` deserialization here
+    // (performing only the cheap on-curve check) and rely on a single subgroup
+    // check on the final aggregated signature. This should save more than 80%
+    // of the time for signature aggregation.
+    SignatureProjective::par_aggregate(signatures)
 }
 
 #[allow(clippy::type_complexity)]
@@ -354,8 +350,8 @@ fn aggregate_signatures(
 fn aggregate_pubkeys_by_payload(
     votes: &[VoteToVerify],
     stats: &mut SigVerifyVoteStats,
-    thread_pool: &ThreadPool,
 ) -> (Vec<Vec<u8>>, Result<Vec<PubkeyProjective>, BlsError>) {
+    debug_assert!(current_thread_index().is_some());
     let mut grouped_votes: HashMap<&Vote, Vec<&BlsPubkeyAffine>> = HashMap::new();
 
     for v in votes {
@@ -370,18 +366,15 @@ fn aggregate_pubkeys_by_payload(
         .increment(grouped_votes.len() as u64)
         .unwrap();
 
-    let (distinct_payloads, distinct_pubkeys_results): (Vec<_>, Vec<_>) =
-        thread_pool.install(|| {
-            grouped_votes
-                .into_par_iter()
-                .map(|(vote, pubkeys)| {
-                    (
-                        get_vote_payload(vote),
-                        PubkeyProjective::aggregate(pubkeys.into_iter()),
-                    )
-                })
-                .unzip()
-        });
+    let (distinct_payloads, distinct_pubkeys_results): (Vec<_>, Vec<_>) = grouped_votes
+        .into_par_iter()
+        .map(|(vote, pubkeys)| {
+            (
+                get_vote_payload(vote),
+                PubkeyProjective::aggregate(pubkeys.into_iter()),
+            )
+        })
+        .unzip();
     let aggregate_pubkeys_result = distinct_pubkeys_results.into_iter().collect();
 
     (distinct_payloads, aggregate_pubkeys_result)
@@ -410,4 +403,27 @@ fn verify_individual_votes(
 
 fn get_vote_payload(vote: &Vote) -> Vec<u8> {
     bincode::serialize(vote).expect("Failed to serialize vote")
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn ensure_aggregate_signatures_runs_on_thread_pool() {
+        let votes = vec![];
+        // calling without a rayon thread pool should trigger a debug assert.
+        aggregate_signatures(&votes).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn ensure_aggregate_pubkeys_by_payload_runs_on_thread_pool() {
+        let votes = vec![];
+        let mut stats = SigVerifyVoteStats::default();
+        // calling without a rayon thread pool should trigger a debug assert.
+        aggregate_pubkeys_by_payload(&votes, &mut stats).1.unwrap();
+    }
 }

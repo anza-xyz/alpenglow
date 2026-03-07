@@ -134,7 +134,6 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
 // Depends on message distinctness because keys are grouped by messages.
 fn bench_aggregate_pubkeys(c: &mut Criterion) {
     let mut group = c.benchmark_group("aggregate_pubkeys");
-    let thread_pool = get_thread_pool();
     let mut stats = SigVerifyVoteStats::default();
 
     for (batch_size, num_distinct) in get_matrix_params() {
@@ -143,7 +142,7 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
 
         group.bench_function(&label, |b| {
             b.iter(|| {
-                let res = aggregate_pubkeys_by_payload(black_box(&votes), &mut stats, &thread_pool);
+                let res = aggregate_pubkeys_by_payload(black_box(&votes), &mut stats);
                 black_box(res).1.unwrap();
             })
         });
@@ -156,7 +155,6 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
 // Pure G1 addition - message distinctness is irrelevant.
 fn bench_aggregate_signatures(c: &mut Criterion) {
     let mut group = c.benchmark_group("aggregate_signatures");
-    let thread_pool = get_thread_pool();
 
     for &batch_size in BATCH_SIZES {
         // Use 1 distinct message just to generate valid data cheaply.
@@ -166,7 +164,7 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
 
         group.bench_function(&label, |b| {
             b.iter(|| {
-                let res = aggregate_signatures(black_box(&votes), &thread_pool);
+                let res = aggregate_signatures(black_box(&votes));
                 black_box(res).unwrap();
             })
         });
