@@ -21,6 +21,7 @@ use {
 };
 #[cfg(feature = "dev-context-only-utils")]
 use {
+    solana_account::WritableAccount,
     solana_bls_signatures::{
         keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed,
     },
@@ -212,6 +213,10 @@ impl VoteAccount {
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random_alpenglow() -> VoteAccount {
+        let lamports = 100;
+        let owner = solana_sdk_ids::vote::id();
+        let mut vote_account = AccountSharedData::new(lamports, VoteStateV4::size_of(), &owner);
+
         let bls_pubkey_compressed: BLSPubkeyCompressed = BLSKeypair::new().public.into();
         let bls_pubkey_compressed_buffer = bincode::serialize(&bls_pubkey_compressed).unwrap();
         let vote_state = VoteStateV4 {
@@ -221,14 +226,14 @@ impl VoteAccount {
             bls_pubkey_compressed: Some(bls_pubkey_compressed_buffer.try_into().unwrap()),
             ..VoteStateV4::default()
         };
-        let account = AccountSharedData::new_data(
-            100, // lamports
-            &VoteStateVersions::new_v4(vote_state),
-            &solana_sdk_ids::vote::id(), // owner
+
+        VoteStateV4::serialize(
+            &VoteStateVersions::V4(Box::new(vote_state)),
+            vote_account.data_as_mut_slice(),
         )
         .unwrap();
 
-        VoteAccount::try_from(account).unwrap()
+        VoteAccount::try_from(vote_account).unwrap()
     }
 }
 
