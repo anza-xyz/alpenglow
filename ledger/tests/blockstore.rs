@@ -40,7 +40,14 @@ fn test_multiple_threads_insert_shred() {
         let mut meta0 = blockstore.meta(0).unwrap().unwrap();
         meta0.next_slots.sort_unstable();
         let expected_next_slots: Vec<_> = (1..num_threads + 1).collect();
-        assert_eq!(meta0.next_slots, expected_next_slots);
+        assert_eq!(
+            meta0
+                .next_slots
+                .iter()
+                .map(|(slot, _)| *slot)
+                .collect::<Vec<_>>(),
+            expected_next_slots
+        );
 
         // Delete slots for next iteration
         blockstore.purge_and_compact_slots(0, num_threads + 1);

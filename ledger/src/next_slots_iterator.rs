@@ -25,7 +25,8 @@ impl Iterator for NextSlotsIterator<'_> {
         } else {
             let slot = self.pending_slots.pop().unwrap();
             if let Some(slot_meta) = self.blockstore.meta(slot).unwrap() {
-                self.pending_slots.extend(slot_meta.next_slots.iter());
+                self.pending_slots
+                    .extend(slot_meta.next_slots.iter().map(|(slot, _)| *slot));
                 Some((slot, slot_meta))
             } else {
                 None

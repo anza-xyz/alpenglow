@@ -111,7 +111,7 @@ impl Blockstore {
             let mut time = Measure::start("retain");
             let original_len = meta.next_slots.len();
             meta.next_slots
-                .retain(|slot| *slot < from_slot || *slot > to_slot);
+                .retain(|(slot, _)| *slot < from_slot || *slot > to_slot);
             if meta.next_slots.len() != original_len {
                 rewritten += 1;
                 info!(
@@ -156,6 +156,9 @@ impl Blockstore {
         let Some(mut slot_meta) = self.meta(slot)? else {
             return Err(BlockstoreError::SlotUnavailable);
         };
+        let block_hash = self
+            .get_double_merkle_root(slot, BlockLocation::Original)
+            .unwrap_or_default();
         let mut write_batch = self.get_write_batch()?;
 
         let columns_purged = self.purge_range(
@@ -169,11 +172,16 @@ impl Blockstore {
         if let Some(parent_slot) = slot_meta.parent_slot {
             let parent_slot_meta = self.meta(parent_slot)?;
             if let Some(mut parent_slot_meta) = parent_slot_meta {
-                // .retain() is a linear scan; however, next_slots should
-                // only contain several elements so this isn't so bad
-                parent_slot_meta
-                    .next_slots
-                    .retain(|&next_slot| next_slot != slot);
+                if purge_alt_columns {
+                    // When preserving alternate columns during a switch, the original block
+                    // has already been backed up to an alternate location and must remain
+                    // chained from its old parent by its exact (slot, hash) tuple.
+                    parent_slot_meta
+                        .next_slots
+                        .retain(|&(next_slot, next_hash)| {
+                            next_slot != slot || next_hash != block_hash
+                        });
+                }
                 self.meta_cf
                     .put_in_batch(&mut write_batch, parent_slot, &parent_slot_meta)?;
             } else {
@@ -1196,13 +1204,13 @@ pub mod tests {
         let expected_slot_meta = SlotMeta {
             slot: 5,
             // Only the next_slots should be preserved
-            next_slots: vec![6, 12],
+            next_slots: vec![(6, Hash::default()), (12, Hash::default())],
             ..SlotMeta::default()
         };
         assert_eq!(slot_meta, expected_slot_meta);
 
         let parent_slot_meta = blockstore.meta(4).unwrap().unwrap();
-        assert_eq!(parent_slot_meta.next_slots, vec![11]);
+        assert_eq!(parent_slot_meta.next_slots, vec![(11, Hash::default())]);
 
         let child_slot_meta = blockstore.meta(6).unwrap().unwrap();
         assert_eq!(child_slot_meta.parent_slot.unwrap(), 5);

@@ -57,7 +57,7 @@ impl Iterator for RootedSlotIterator<'_> {
             .unwrap_or(None);
 
         if let Some(ref slot_meta) = slot_meta {
-            self.next_slots.clone_from(&slot_meta.next_slots);
+            self.next_slots = slot_meta.next_slots.iter().map(|(slot, _)| *slot).collect();
         }
 
         if slot_meta.is_none() && slot_skipped {

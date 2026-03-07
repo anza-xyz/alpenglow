@@ -6,7 +6,7 @@ use {
     rayon::ThreadPool,
     reed_solomon_erasure::{galois_8::ReedSolomon, Error::TooFewDataShards},
     solana_clock::Slot,
-    solana_entry::{block_component::BlockComponent, entry::Entry},
+    solana_entry::entry::Entry,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_rayon_threadlimit::get_thread_count,
@@ -16,6 +16,9 @@ use {
         time::Instant,
     },
 };
+
+#[cfg(test)]
+use solana_entry::block_component::BlockComponent;
 
 static PAR_THREAD_POOL: std::sync::LazyLock<ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
@@ -63,6 +66,7 @@ impl Shredder {
         }
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn make_merkle_shreds_from_component(
         &self,
@@ -179,6 +183,7 @@ impl Shredder {
         .partition(Shred::is_data)
     }
 
+    #[cfg(test)]
     pub fn component_to_merkle_shreds_for_tests(
         &self,
         keypair: &Keypair,
