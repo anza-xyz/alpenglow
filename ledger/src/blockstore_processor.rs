@@ -1954,7 +1954,7 @@ fn process_next_slots(
     }
 
     // This is a fork point if there are multiple children, create a new child bank for each fork
-    for next_slot in &meta.next_slots {
+    for (next_slot, _) in &meta.next_slots {
         if opts
             .halt_at_slot
             .is_some_and(|halt_at_slot| *next_slot > halt_at_slot)
