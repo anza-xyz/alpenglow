@@ -273,6 +273,7 @@ mod tests {
         solana_epoch_schedule::EpochSchedule,
         solana_genesis_config::GenesisConfig,
         solana_native_token::LAMPORTS_PER_SOL,
+        solana_rent::Rent,
         solana_signer::Signer,
         solana_votor_messages::reward_certificate::NUM_SLOTS_FOR_REWARD,
         std::sync::Arc,
@@ -332,10 +333,11 @@ mod tests {
         let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
             1_000_000_000,
             &validator_keypairs,
-            vec![100; validator_keypairs.len()],
+            vec![LAMPORTS_PER_SOL * 100; validator_keypairs.len()],
         )
         .genesis_config;
         genesis_config.epoch_schedule = EpochSchedule::without_warmup();
+        genesis_config.rent = Rent::default();
 
         let validator_keypairs_to_reward = validator_keypairs
             .choose_multiple(&mut rand::thread_rng(), num_validators_to_reward)
