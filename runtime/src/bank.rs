@@ -41,7 +41,10 @@ use {
             partitioned_epoch_rewards::{EpochRewardStatus, VoteRewardsAccounts},
         },
         bank_forks::BankForks,
-        block_component_processor::{vote_reward::VoteRewardAccountState, BlockComponentProcessor},
+        block_component_processor::{
+            vote_reward::epoch_inflation_account_state::EpochInflationAccountState,
+            BlockComponentProcessor,
+        },
         epoch_stakes::{BLSPubkeyToRankMap, NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
@@ -1694,7 +1697,7 @@ impl Bank {
                 &mut rewards_metrics,
             ));
 
-        VoteRewardAccountState::new_epoch_update_account(
+        EpochInflationAccountState::new_epoch_update_account(
             self,
             parent_epoch,
             parent_capitalization,
