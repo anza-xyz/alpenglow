@@ -397,7 +397,7 @@ solana-big-mod-exp = "3.0.0"
 solana-bincode = "3.0.0"
 solana-blake3-hasher = "3.0.0"
 solana-bloom = { path = "bloom", version = "=3.1.0" }
-solana-bls-signatures = { version = "3.0.0", features = ["serde"] }
+solana-bls-signatures = { version = "3.2.0", features = ["serde"] }
 solana-bls12-381 = { path = "curves/bls12-381", version = "=3.1.0" }
 solana-bn254 = "3.0.0"
 solana-borsh = "3.0.0"
@@ -655,6 +655,7 @@ opt-level = 3
 [patch.crates-io]
 # for details, see https://github.com/anza-xyz/crossbeam/commit/fd279d707025f0e60951e429bf778b4813d1b6bf
 crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "fd279d707025f0e60951e429bf778b4813d1b6bf" }
+solana-bls-signatures = { path = "../solana-sdk/bls-signatures" }
 
 # We include the following crates as our dependencies above from crates.io:
 #
