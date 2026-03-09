@@ -20,7 +20,9 @@ pub enum PayVoteRewardError {
         reward_slot: Slot,
         current_slot: Slot,
     },
-    #[error("missing reward slot validator")]
+    #[error(
+        "validator {pubkey} missing in current slot {current_slot} for reward slot {reward_slot}"
+    )]
     MissingRewardSlotValidator {
         pubkey: Pubkey,
         reward_slot: Slot,
@@ -268,6 +270,7 @@ mod tests {
                 create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
             },
         },
+        agave_votor_messages::reward_certificate::NUM_SLOTS_FOR_REWARD,
         rand::seq::SliceRandom,
         solana_account::ReadableAccount,
         solana_epoch_schedule::EpochSchedule,
@@ -275,7 +278,6 @@ mod tests {
         solana_native_token::LAMPORTS_PER_SOL,
         solana_rent::Rent,
         solana_signer::Signer,
-        solana_votor_messages::reward_certificate::NUM_SLOTS_FOR_REWARD,
         std::sync::Arc,
     };
 
