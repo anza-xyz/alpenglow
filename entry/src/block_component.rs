@@ -131,16 +131,16 @@
 /// ```
 use {
     crate::entry::Entry,
+    agave_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
+    },
     solana_bls_signatures::{
         signature::AsSignatureAffine, BlsError, Signature as BLSSignature,
         SignatureCompressed as BLSSignatureCompressed,
     },
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType},
-        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
-    },
     std::mem::MaybeUninit,
     wincode::{
         containers::{Pod, Vec as WincodeVec},

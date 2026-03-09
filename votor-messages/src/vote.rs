@@ -11,7 +11,7 @@ use {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample, AbiEnumVisitor),
-    frozen_abi(digest = "ECnePnemn3asm25ZfWHjaQrsNwoMyrpYiGEn8rDohdwM")
+    frozen_abi(digest = "AgKoR2cpjUSVCW7Cpihob5nDiPcFt1PXmoPKWJg3zuSB")
 )]
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, SchemaRead, SchemaWrite,

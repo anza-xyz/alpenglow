@@ -17,6 +17,9 @@ use {
         poh_controller::PohController, poh_service::PohService, record_channels::record_channels,
         transaction_recorder::TransactionRecorder,
     },
+    agave_votor_messages::{
+        migration::MigrationStatus, reward_certificate::BuildRewardCertsRespError,
+    },
     arc_swap::ArcSwapOption,
     crossbeam_channel::{bounded, unbounded, Receiver, SendError, Sender, TrySendError},
     log::*,
@@ -34,9 +37,6 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, installed_scheduler_pool::BankWithScheduler},
     solana_transaction::versioned::VersionedTransaction,
-    solana_votor_messages::{
-        migration::MigrationStatus, reward_certificate::BuildRewardCertsRespError,
-    },
     std::{
         cmp,
         sync::{

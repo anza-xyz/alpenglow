@@ -1,5 +1,7 @@
 use {
     super::{Error, Result},
+    agave_votor::event::{CompletedBlock, VotorEvent, VotorEventSender},
+    agave_votor_messages::migration::MigrationStatus,
     crossbeam_channel::Receiver,
     solana_clock::Slot,
     solana_entry::{block_component::BlockComponent, entry::Entry},
@@ -10,8 +12,6 @@ use {
     },
     solana_poh::poh_recorder::WorkingBankEntryMarker,
     solana_runtime::bank::Bank,
-    solana_votor::event::{CompletedBlock, VotorEvent, VotorEventSender},
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::Arc,
         time::{Duration, Instant},

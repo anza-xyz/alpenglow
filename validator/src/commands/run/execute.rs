@@ -7,6 +7,7 @@ use {
         ledger_lockfile, lock_ledger,
     },
     agave_logger::redirect_stderr_to_file,
+    agave_votor::vote_history_storage,
     clap::{crate_name, value_t, value_t_or_exit, values_t, values_t_or_exit, ArgMatches},
     crossbeam_channel::unbounded,
     log::*,
@@ -67,7 +68,6 @@ use {
         xdp::{set_cpu_affinity, XdpConfig},
     },
     solana_validator_exit::Exit,
-    solana_votor::vote_history_storage,
     std::{
         collections::HashSet,
         fs::{self, File},
@@ -110,6 +110,7 @@ pub fn execute(
         tvu_receive_threads,
         tvu_retransmit_threads,
         tvu_sigverify_threads,
+        tvu_bls_sigverify_threads,
     } = cli::thread_args::parse_num_threads_args(matches);
 
     let identity_keypair = Arc::new(run_args.identity_keypair);
@@ -604,6 +605,7 @@ pub fn execute(
         replay_forks_threads,
         replay_transactions_threads,
         tvu_shred_sigverify_threads: tvu_sigverify_threads,
+        tvu_bls_sigverify_threads,
         delay_leader_block_for_pending_fork: matches
             .is_present("delay_leader_block_for_pending_fork"),
         wen_restart_proto_path: value_t!(matches, "wen_restart", PathBuf).ok(),

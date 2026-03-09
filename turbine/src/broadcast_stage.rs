@@ -12,6 +12,8 @@ use {
         cluster_nodes::{self, ClusterNodes, ClusterNodesCache},
         xdp::XdpSender,
     },
+    agave_votor::event::VotorEventSender,
+    agave_votor_messages::migration::MigrationStatus,
     bytes::Bytes,
     crossbeam_channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender},
     itertools::{Either, Itertools},
@@ -34,8 +36,6 @@ use {
         socket::SocketAddrSpace,
     },
     solana_time_utils::{timestamp, AtomicInterval},
-    solana_votor::event::VotorEventSender,
-    solana_votor_messages::migration::MigrationStatus,
     static_assertions::const_assert_eq,
     std::{
         collections::{HashMap, HashSet},

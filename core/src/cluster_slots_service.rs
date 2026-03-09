@@ -1,6 +1,7 @@
 pub mod cluster_slots;
 pub mod slot_supporters;
 use {
+    agave_votor_messages::migration::MigrationStatus,
     cluster_slots::ClusterSlots,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     solana_clock::Slot,
@@ -8,7 +9,6 @@ use {
     solana_ledger::blockstore::Blockstore,
     solana_measure::measure::Measure,
     solana_runtime::bank_forks::BankForks,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},

@@ -1,5 +1,6 @@
 use {
     crate::{event_handler::PendingBlocks, voting_utils::VotingContext, votor::SharedContext},
+    agave_votor_messages::consensus_message::Block,
     crossbeam_channel::Sender,
     solana_clock::Slot,
     solana_hash::Hash,
@@ -15,7 +16,6 @@ use {
         snapshot_controller::SnapshotController,
     },
     solana_time_utils::timestamp,
-    solana_votor_messages::consensus_message::Block,
     std::{
         collections::BTreeSet,
         sync::{Arc, RwLock},

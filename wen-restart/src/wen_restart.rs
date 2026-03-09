@@ -14,6 +14,7 @@ use {
             LastVotedForkSlotsRecord, State as RestartState, WenRestartProgress,
         },
     },
+    agave_votor_messages::migration::MigrationStatus,
     anyhow::Result,
     log::*,
     prost::Message,
@@ -49,7 +50,6 @@ use {
     solana_svm_timings::ExecuteTimings,
     solana_time_utils::timestamp,
     solana_vote::vote_transaction::VoteTransaction,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::{HashMap, HashSet},
         fs::{read, File},

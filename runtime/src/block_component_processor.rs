@@ -4,6 +4,11 @@ use {
         validated_block_finalization::ValidatedBlockFinalizationCert,
         validated_reward_certificate::{Error as ValidatedRewardCertError, ValidatedRewardCert},
     },
+    agave_votor_messages::{
+        consensus_message::{Certificate, ConsensusMessage},
+        fraction::Fraction,
+        migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
+    },
     crossbeam_channel::Sender,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
@@ -12,11 +17,6 @@ use {
         VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
     },
     solana_pubkey::Pubkey,
-    solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage},
-        fraction::Fraction,
-        migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
-    },
     std::{num::NonZeroU64, sync::Arc},
     thiserror::Error,
     vote_reward::calculate_and_pay_voting_reward,

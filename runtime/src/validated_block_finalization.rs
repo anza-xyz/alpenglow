@@ -6,15 +6,15 @@
 
 use {
     crate::bank::Bank,
+    agave_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        fraction::Fraction,
+    },
     log::warn,
     solana_bls_signatures::BlsError,
     solana_clock::Slot,
     solana_entry::block_component::{FinalCertificate, VotesAggregate},
     solana_hash::Hash,
-    solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType},
-        fraction::Fraction,
-    },
     std::num::NonZeroU64,
     thiserror::Error,
 };
@@ -326,11 +326,11 @@ mod tests {
         crate::genesis_utils::{
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
+        agave_votor_messages::vote::Vote,
         bitvec::prelude::*,
         solana_bls_signatures::SignatureProjective,
         solana_entry::block_component::VotesAggregate,
         solana_signer_store::encode_base2,
-        solana_votor_messages::vote::Vote,
         std::sync::Arc,
     };
 

@@ -1,11 +1,5 @@
 use {
-    crossbeam_channel::{select_biased, Receiver, Sender},
-    entry::Entry,
-    solana_clock::Slot,
-    solana_gossip::cluster_info::ClusterInfo,
-    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
-    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
-    solana_votor_messages::{
+    agave_votor_messages::{
         consensus_message::VoteMessage,
         reward_certificate::{
             AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsRespError,
@@ -13,6 +7,12 @@ use {
         },
         vote::Vote,
     },
+    crossbeam_channel::{select_biased, Receiver, Sender},
+    entry::Entry,
+    solana_clock::Slot,
+    solana_gossip::cluster_info::ClusterInfo,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
+    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     std::{
         collections::BTreeMap,
         sync::{

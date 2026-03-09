@@ -6,21 +6,33 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use {
+    agave_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion},
+    rayon::{ThreadPool, ThreadPoolBuilder},
     solana_bls_signatures::{Keypair as BLSKeypair, Pubkey as BLSPubkey, VerifiablePubkey},
-    solana_core::bls_sigverify::bls_vote_sigverify::{
-        aggregate_pubkeys_by_payload, aggregate_signatures, verify_individual_votes,
-        verify_votes_optimistic, Stats as VoteStats, VoteToVerify,
+    solana_core::bls_sigverify::{
+        bls_vote_sigverify::{
+            aggregate_pubkeys_by_payload, aggregate_signatures, verify_individual_votes,
+            verify_votes_optimistic, VoteToVerify,
+        },
+        stats::SigVerifyVoteStats,
     },
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_signer::Signer,
-    solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     std::sync::Arc,
 };
 
 static MESSAGE_COUNTS: &[usize] = &[1, 2, 4, 8, 16];
 static BATCH_SIZES: &[usize] = &[8, 16, 32, 64, 128];
+
+fn get_thread_pool() -> ThreadPool {
+    let num_threads = 4;
+    ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .unwrap()
+}
 
 fn get_matrix_params() -> impl Iterator<Item = (usize, usize)> {
     BATCH_SIZES.iter().flat_map(|&batch_size| {
@@ -67,7 +79,7 @@ fn generate_test_data(num_distinct_messages: usize, batch_size: usize) -> Vec<Vo
 
         votes_to_verify.push(VoteToVerify {
             vote_message,
-            bls_pubkey: bls_keypair.public.into(),
+            bls_pubkey: bls_keypair.public,
             pubkey: Keypair::new().pubkey(),
         });
     }
@@ -89,7 +101,8 @@ fn bench_verify_single_signature(c: &mut Criterion) {
         b.iter(|| {
             // We use the raw verify method from the underlying library
             // to establish the cryptographic floor.
-            pubkey.verify_signature(black_box(&sig), black_box(msg))
+            let res = pubkey.verify_signature(black_box(&sig), black_box(msg));
+            black_box(res).unwrap();
         })
     });
     group.finish();
@@ -99,34 +112,43 @@ fn bench_verify_single_signature(c: &mut Criterion) {
 // Depends on both batch size and message distinctness due to pairing checks.
 fn bench_verify_votes_optimistic(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_optimistic");
+    let thread_pool = get_thread_pool();
+    let mut stats = SigVerifyVoteStats::default();
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let mut stats = VoteStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| verify_votes_optimistic(black_box(&votes), black_box(&mut stats)))
+            b.iter(|| {
+                let res = verify_votes_optimistic(black_box(&votes), &mut stats, &thread_pool);
+                black_box(res);
+            })
         });
     }
     group.finish();
+    black_box(stats);
 }
 
 // Public Key Aggregation
 // Depends on message distinctness because keys are grouped by messages.
 fn bench_aggregate_pubkeys(c: &mut Criterion) {
     let mut group = c.benchmark_group("aggregate_pubkeys");
+    let mut stats = SigVerifyVoteStats::default();
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let mut stats = VoteStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| aggregate_pubkeys_by_payload(black_box(&votes), black_box(&mut stats)))
+            b.iter(|| {
+                let res = aggregate_pubkeys_by_payload(black_box(&votes), &mut stats);
+                black_box(res).1.unwrap();
+            })
         });
     }
     group.finish();
+    black_box(stats);
 }
 
 // Signature Aggregation
@@ -141,7 +163,10 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| aggregate_signatures(black_box(&votes)))
+            b.iter(|| {
+                let res = aggregate_signatures(black_box(&votes));
+                black_box(res).unwrap();
+            })
         });
     }
     group.finish();
@@ -151,22 +176,27 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
 // Message distinctness is irrelevant.
 fn bench_verify_individual_votes(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_fallback");
+    let thread_pool = get_thread_pool();
+    let mut stats = SigVerifyVoteStats::default();
 
     for &batch_size in BATCH_SIZES {
         // Distinctness doesn't affect the cost of N individual verifications.
         let votes = generate_test_data(1, batch_size);
-        let mut stats = VoteStats::default();
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
             b.iter_batched(
                 || votes.clone(),
-                |votes| verify_individual_votes(black_box(votes), black_box(&mut stats)),
+                |votes| {
+                    let res = verify_individual_votes(black_box(votes), &mut stats, &thread_pool);
+                    black_box(res);
+                },
                 BatchSize::SmallInput,
             )
         });
     }
     group.finish();
+    black_box(stats);
 }
 
 criterion_group!(

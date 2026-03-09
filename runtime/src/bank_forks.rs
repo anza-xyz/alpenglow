@@ -9,6 +9,7 @@ use {
         },
         snapshot_controller::SnapshotController,
     },
+    agave_votor_messages::migration::MigrationStatus,
     arc_swap::ArcSwap,
     log::*,
     solana_clock::{BankId, Slot},
@@ -16,7 +17,6 @@ use {
     solana_measure::measure::Measure,
     solana_program_runtime::loaded_programs::{BlockRelation, ForkGraph},
     solana_unified_scheduler_logic::SchedulingMode,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
         ops::Index,

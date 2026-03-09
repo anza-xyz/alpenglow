@@ -62,6 +62,11 @@ use {
         voting_service::BLSOp,
         voting_utils::VotingContext,
     },
+    agave_votor_messages::{
+        consensus_message::ConsensusMessage,
+        migration::MigrationStatus,
+        reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
+    },
     crossbeam_channel::{Receiver, Sender},
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
@@ -78,11 +83,6 @@ use {
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
         validated_block_finalization::ValidatedBlockFinalizationCert,
-    },
-    solana_votor_messages::{
-        consensus_message::ConsensusMessage,
-        migration::MigrationStatus,
-        reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
     std::{
         collections::HashMap,

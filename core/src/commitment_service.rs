@@ -1,5 +1,9 @@
 use {
     crate::consensus::{tower_vote_state::TowerVoteState, Stake},
+    agave_votor::commitment::{
+        CommitmentAggregationData as AlpenglowCommitmentAggregationData,
+        CommitmentType as AlpenglowCommitmentType,
+    },
     crossbeam_channel::{bounded, select, unbounded, Receiver, RecvTimeoutError, Sender},
     solana_clock::Slot,
     solana_measure::measure::Measure,
@@ -9,10 +13,6 @@ use {
     solana_runtime::{
         bank::Bank,
         commitment::{BlockCommitment, BlockCommitmentCache, CommitmentSlots, VOTE_THRESHOLD_SIZE},
-    },
-    solana_votor::commitment::{
-        CommitmentAggregationData as AlpenglowCommitmentAggregationData,
-        CommitmentType as AlpenglowCommitmentType,
     },
     std::{
         cmp::max,

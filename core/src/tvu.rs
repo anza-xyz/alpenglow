@@ -6,7 +6,7 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_trace::BankingTracer,
         block_creation_loop::ReplayHighestFrozen,
-        bls_sigverify::bls_sigverify_service::BLSSigVerifyService,
+        bls_sigverify::bls_sigverifier,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,
             VerifiedVoteSender, VoteTracker,
@@ -28,6 +28,15 @@ use {
         warm_quic_cache_service::WarmQuicCacheService,
         window_service::{WindowService, WindowServiceChannels},
     },
+    agave_votor::{
+        consensus_metrics::MAX_IN_FLIGHT_CONSENSUS_EVENTS,
+        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
+        vote_history::VoteHistory,
+        vote_history_storage::VoteHistoryStorage,
+        voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
+        votor::{Votor, VotorConfig},
+    },
+    agave_votor_messages::reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
     solana_client::connection_cache::ConnectionCache,
@@ -66,17 +75,6 @@ use {
         streamer::StakedNodes,
     },
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
-    solana_votor::{
-        consensus_metrics::MAX_IN_FLIGHT_CONSENSUS_EVENTS,
-        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
-        vote_history::VoteHistory,
-        vote_history_storage::VoteHistoryStorage,
-        voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
-        votor::{Votor, VotorConfig},
-    },
-    solana_votor_messages::reward_certificate::{
-        BuildRewardCertsRequest, BuildRewardCertsResponse,
-    },
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -109,7 +107,7 @@ pub struct Tvu {
     warm_quic_cache_service: Option<WarmQuicCacheService>,
     drop_bank_service: DropBankService,
     duplicate_shred_listener: DuplicateShredListener,
-    alpenglow_sigverify_service: BLSSigVerifyService,
+    alpenglow_sigverify_t: thread::JoinHandle<()>,
     alpenglow_quic_t: thread::JoinHandle<()>,
     votor: Votor,
     commitment_service: AggregateCommitmentService,
@@ -135,6 +133,7 @@ pub struct TvuConfig {
     pub replay_forks_threads: NonZeroUsize,
     pub replay_transactions_threads: NonZeroUsize,
     pub shred_sigverify_threads: NonZeroUsize,
+    pub bls_sigverify_threads: NonZeroUsize,
     pub xdp_sender: Option<XdpSender>,
 }
 
@@ -149,6 +148,7 @@ impl Default for TvuConfig {
             replay_forks_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             replay_transactions_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             shred_sigverify_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
+            bls_sigverify_threads: NonZeroUsize::new(4).expect("4 is non-zero"),
             xdp_sender: None,
         }
     }
@@ -320,7 +320,8 @@ impl Tvu {
 
         // At the moment there are roughly 1K validators and the sigverifier receives votes in batches and sends them to the consensus reward container in batches so hopefully using a channel of 2K slots would never block.
         let (reward_votes_sender, reward_votes_receiver) = bounded(2000);
-        let alpenglow_sigverify_service = BLSSigVerifyService::new(
+        let alpenglow_sigverify_t = bls_sigverifier::spawn_service(
+            exit.clone(),
             bls_packet_receiver,
             bank_forks.read().unwrap().sharable_banks(),
             verified_vote_sender.clone(),
@@ -330,6 +331,7 @@ impl Tvu {
             alpenglow_last_voted.clone(),
             cluster_info.clone(),
             leader_schedule_cache.clone(),
+            tvu_config.bls_sigverify_threads.get(),
         );
 
         let mut key_notifiers = key_notifiers.write().unwrap();
@@ -634,7 +636,7 @@ impl Tvu {
             warm_quic_cache_service,
             drop_bank_service,
             duplicate_shred_listener,
-            alpenglow_sigverify_service,
+            alpenglow_sigverify_t,
             alpenglow_quic_t,
             votor,
             commitment_service,
@@ -661,7 +663,7 @@ impl Tvu {
         }
         self.drop_bank_service.join()?;
         self.duplicate_shred_listener.join()?;
-        self.alpenglow_sigverify_service.join()?;
+        self.alpenglow_sigverify_t.join()?;
         self.alpenglow_quic_t.join()?;
         self.votor.join()?;
         self.commitment_service.join()?;
@@ -698,6 +700,7 @@ pub mod tests {
             consensus::tower_storage::FileTowerStorage,
             repair::quic_endpoint::RepairQuicAsyncSenders,
         },
+        agave_votor::vote_history_storage::FileVoteHistoryStorage,
         serial_test::serial,
         solana_gossip::{cluster_info::ClusterInfo, node::Node},
         solana_keypair::Keypair,
@@ -713,7 +716,6 @@ pub mod tests {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
-        solana_votor::vote_history_storage::FileVoteHistoryStorage,
         std::sync::atomic::{AtomicU64, Ordering},
     };
 

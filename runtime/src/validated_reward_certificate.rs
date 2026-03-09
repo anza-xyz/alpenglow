@@ -1,13 +1,13 @@
 use {
     crate::bank::Bank,
     agave_bls_cert_verify::cert_verify::{verify_base2, Error as BlsCertVerifyError},
-    solana_bls_signatures::BlsError,
-    solana_clock::Slot,
-    solana_pubkey::Pubkey,
-    solana_votor_messages::{
+    agave_votor_messages::{
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, NUM_SLOTS_FOR_REWARD},
         vote::Vote,
     },
+    solana_bls_signatures::BlsError,
+    solana_clock::Slot,
+    solana_pubkey::Pubkey,
     thiserror::Error,
 };
 
@@ -145,14 +145,15 @@ mod tests {
         crate::genesis_utils::{
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
+        agave_votor_messages::consensus_message::VoteMessage,
         bitvec::vec::BitVec,
         solana_bls_signatures::{
-            Keypair as BlsKeypair, Pubkey as BLSPubkey, Signature as BLSSignature,
-            SignatureCompressed as BlsSignatureCompressed, SignatureProjective,
+            pubkey::PubkeyCompressed as BLSPubkeyCompressed, Keypair as BlsKeypair,
+            Signature as BLSSignature, SignatureCompressed as BlsSignatureCompressed,
+            SignatureProjective,
         },
         solana_hash::Hash,
         solana_signer_store::encode_base2,
-        solana_votor_messages::consensus_message::VoteMessage,
         std::{collections::HashMap, sync::Arc},
     };
 
@@ -195,7 +196,12 @@ mod tests {
             .collect::<Vec<_>>();
         let keypair_map = validator_keypairs
             .iter()
-            .map(|k| (BLSPubkey::from(k.bls_keypair.public), k.bls_keypair.clone()))
+            .map(|k| {
+                (
+                    BLSPubkeyCompressed::from(k.bls_keypair.public),
+                    k.bls_keypair.clone(),
+                )
+            })
             .collect::<HashMap<_, _>>();
         let genesis = create_genesis_config_with_alpenglow_vote_accounts(
             1_000_000_000,
@@ -211,8 +217,9 @@ mod tests {
             .bls_pubkey_to_rank_map();
         let signing_keys = (0..num_validators)
             .map(|index| {
+                let pubkey_affine = rank_map.get_pubkey_and_stake(index).unwrap().bls_pubkey;
                 keypair_map
-                    .get(&rank_map.get_pubkey_and_stake(index).unwrap().bls_pubkey)
+                    .get(&BLSPubkeyCompressed::from(pubkey_affine))
                     .unwrap()
             })
             .collect::<Vec<_>>();

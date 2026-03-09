@@ -11,6 +11,8 @@ use {
         validator::{BlockProductionMethod, TransactionStructure},
     },
     agave_banking_stage_ingress_types::BankingPacketBatch,
+    agave_votor::event::VotorEventReceiver,
+    agave_votor_messages::migration::MigrationStatus,
     assert_matches::assert_matches,
     bincode::deserialize_from,
     crossbeam_channel::{bounded, unbounded, Sender},
@@ -43,8 +45,6 @@ use {
     solana_signer::Signer,
     solana_streamer::socket::SocketAddrSpace,
     solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
-    solana_votor::event::VotorEventReceiver,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::BTreeMap,
         fmt::Display,

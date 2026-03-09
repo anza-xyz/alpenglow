@@ -6,13 +6,13 @@ use {
         poh_recorder::{PohRecorder, Record},
         record_channels::RecordReceiver,
     },
+    agave_votor_messages::migration::MigrationStatus,
     crossbeam_channel::Sender,
     log::*,
     solana_clock::DEFAULT_HASHES_PER_SECOND,
     solana_entry::poh::Poh,
     solana_measure::measure::Measure,
     solana_poh_config::PohConfig,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},

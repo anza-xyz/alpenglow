@@ -5,6 +5,8 @@ use {
         integration_tests::DEFAULT_NODE_STAKE,
         validator_configs::*,
     },
+    agave_votor::vote_history_storage::FileVoteHistoryStorage,
+    agave_votor_messages::migration::GENESIS_CERTIFICATE_ACCOUNT,
     itertools::izip,
     log::*,
     solana_account::{Account, AccountSharedData},
@@ -60,8 +62,6 @@ use {
         vote_instruction,
         vote_state::{self, VoteInit, VoteStateTargetVersion},
     },
-    solana_votor::vote_history_storage::FileVoteHistoryStorage,
-    solana_votor_messages::migration::GENESIS_CERTIFICATE_ACCOUNT,
     std::{
         collections::HashMap,
         io::{Error, Result},

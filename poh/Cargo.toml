@@ -21,6 +21,7 @@ dev-context-only-utils = []
 shuttle-test = ["dep:shuttle"]
 
 [dependencies]
+agave-votor-messages = { workspace = true }
 arc-swap = { workspace = true }
 core_affinity = { workspace = true }
 crossbeam-channel = { workspace = true }
@@ -39,7 +40,6 @@ solana-runtime = { workspace = true }
 solana-time-utils = { workspace = true }
 solana-transaction = { workspace = true }
 solana-version = { workspace = true }
-solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

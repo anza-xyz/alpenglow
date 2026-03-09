@@ -259,6 +259,9 @@ impl PropagatedStats {
 #[derive(Default)]
 pub struct ProgressMap {
     progress_map: HashMap<Slot, ForkProgress>,
+    /// Tracks the number of times a slot was switched from an alternate location.
+    /// This persists even if the slot is removed from the progress_map due to a switch.
+    bank_switch_counts: HashMap<Slot, u64>,
 }
 
 impl std::ops::Deref for ProgressMap {
@@ -276,6 +279,12 @@ impl std::ops::DerefMut for ProgressMap {
 
 impl ProgressMap {
     pub fn insert(&mut self, slot: Slot, fork_progress: ForkProgress) {
+        let num_bank_switches = self.get_num_bank_switches(slot);
+        fork_progress
+            .replay_stats
+            .write()
+            .unwrap()
+            .num_bank_switches = num_bank_switches;
         self.progress_map.insert(slot, fork_progress);
     }
 
@@ -300,6 +309,15 @@ impl ProgressMap {
         self.progress_map
             .get(&slot)
             .map(|fork_progress| &fork_progress.fork_stats)
+    }
+
+    pub fn increment_num_bank_switches(&mut self, slot: Slot) {
+        let count = self.bank_switch_counts.entry(slot).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+
+    pub fn get_num_bank_switches(&self, slot: Slot) -> u64 {
+        self.bank_switch_counts.get(&slot).cloned().unwrap_or(0)
     }
 
     pub fn get_fork_stats_mut(&mut self, slot: Slot) -> Option<&mut ForkStats> {
@@ -396,6 +414,8 @@ impl ProgressMap {
 
     pub fn handle_new_root(&mut self, bank_forks: &BankForks) {
         self.progress_map
+            .retain(|k, _| bank_forks.get(*k).is_some());
+        self.bank_switch_counts
             .retain(|k, _| bank_forks.get(*k).is_some());
     }
 

@@ -20,6 +20,7 @@ name = "solana_entry"
 dev-context-only-utils = []
 
 [dependencies]
+agave-votor-messages = { workspace = true }
 bincode = { workspace = true }
 crossbeam-channel = { workspace = true }
 dlopen2 = { workspace = true }
@@ -40,7 +41,6 @@ solana-runtime-transaction = { workspace = true }
 solana-sha256-hasher = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true }
-solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
 wincode = { workspace = true }
 

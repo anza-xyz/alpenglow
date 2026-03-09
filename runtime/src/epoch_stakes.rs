@@ -1,7 +1,9 @@
 use {
     crate::stakes::SerdeStakesToStakeFormat,
     serde::{Deserialize, Serialize},
-    solana_bls_signatures::{pubkey::PubkeyCompressed as BLSPubkeyCompressed, Pubkey as BLSPubkey},
+    solana_bls_signatures::pubkey::{
+        PubkeyAffine as BLSPubkeyAffine, PubkeyCompressed as BLSPubkeyCompressed,
+    },
     solana_clock::Epoch,
     solana_pubkey::Pubkey,
     solana_vote::vote_account::VoteAccountsHashMap,
@@ -17,68 +19,86 @@ pub type EpochAuthorizedVoters = HashMap<Pubkey, Pubkey>;
 
 /// Entry in the [`BLSPubkeyToRankMap`] associating a validator's identity
 /// pubkey and BLS pubkey with its stake.
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
 pub struct BLSPubkeyStakeEntry {
     pub pubkey: Pubkey,
-    pub bls_pubkey: BLSPubkey,
+    pub bls_pubkey: BLSPubkeyAffine,
     pub stake: u64,
 }
 
-/// Container to store a mapping from validator [`BLSPubkey`] to rank.
+/// Container to store a mapping from validator [`BLSPubkeyAffine`] to rank.
 ///
 /// A validator with a smaller rank has a higher stake.
 /// Container also supports lookups from rank to [`BLSPubkeyStakeEntry`].
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
 pub struct BLSPubkeyToRankMap {
-    rank_map: HashMap<BLSPubkey, u16>,
-    //TODO(wen): We can make SortedPubkeys a Vec<BLSPubkey> after we remove ed25519
-    // pubkey from certificate pool.
+    rank_map: HashMap<BLSPubkeyCompressed, u16>,
+    //TODO(wen): We can make SortedPubkeys a Vec<BLSPubkeyAffine> after we remove
+    // ed25519 pubkey from certificate pool.
     sorted_pubkeys: Vec<BLSPubkeyStakeEntry>,
+}
+
+// We cannot auto derive `AbiExample` for `BLSPubkeyToRankMap` because
+// the `BLSPubkeyAffine` type does not implement `AbiExample` or `Default`.
+#[cfg(feature = "frozen-abi")]
+impl solana_frozen_abi::abi_example::AbiExample for BLSPubkeyToRankMap {
+    fn example() -> Self {
+        Self {
+            rank_map: HashMap::new(),
+            sorted_pubkeys: Vec::new(),
+        }
+    }
 }
 
 pub(crate) fn bls_pubkey_compressed_bytes_to_bls_pubkey(
     bls_pubkey_compressed_bytes: [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE],
-) -> Option<BLSPubkey> {
+) -> Option<(BLSPubkeyCompressed, BLSPubkeyAffine)> {
     let bls_pubkey_compressed: BLSPubkeyCompressed =
         bincode::deserialize(&bls_pubkey_compressed_bytes).ok()?;
-    BLSPubkey::try_from(bls_pubkey_compressed).ok()
+    let bls_pubkey_affine = BLSPubkeyAffine::try_from(bls_pubkey_compressed).ok()?;
+    Some((bls_pubkey_compressed, bls_pubkey_affine))
 }
 
 impl BLSPubkeyToRankMap {
     pub fn new(epoch_vote_accounts_hash_map: &VoteAccountsHashMap) -> Self {
-        let mut pubkey_stake_pair_vec: Vec<(Pubkey, BLSPubkey, u64)> = epoch_vote_accounts_hash_map
-            .iter()
-            .filter_map(|(pubkey, (stake, account))| {
-                if *stake > 0 {
-                    account
-                        .vote_state_view()
-                        .bls_pubkey_compressed()
-                        .map(bls_pubkey_compressed_bytes_to_bls_pubkey)
-                        .and_then(|bls_pubkey| {
-                            bls_pubkey.map(|bls_pubkey| (*pubkey, bls_pubkey, *stake))
-                        })
-                } else {
-                    None
-                }
-            })
-            .collect();
-        pubkey_stake_pair_vec.sort_by(|(_, a_pubkey, a_stake), (_, b_pubkey, b_stake)| {
-            b_stake.cmp(a_stake).then(a_pubkey.cmp(b_pubkey))
-        });
+        let mut pubkey_stake_pair_vec: Vec<(Pubkey, BLSPubkeyCompressed, BLSPubkeyAffine, u64)> =
+            epoch_vote_accounts_hash_map
+                .iter()
+                .filter_map(|(pubkey, (stake, account))| {
+                    if *stake > 0 {
+                        account
+                            .vote_state_view()
+                            .bls_pubkey_compressed()
+                            .and_then(bls_pubkey_compressed_bytes_to_bls_pubkey)
+                            .map(|(bls_pubkey_compressed, bls_pubkey)| {
+                                (*pubkey, bls_pubkey_compressed, bls_pubkey, *stake)
+                            })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        pubkey_stake_pair_vec.sort_by(
+            |(_, a_pubkey_compressed, _, a_stake), (_, b_pubkey_compressed, _, b_stake)| {
+                b_stake
+                    .cmp(a_stake)
+                    .then(a_pubkey_compressed.cmp(b_pubkey_compressed))
+            },
+        );
         let mut sorted_pubkeys = Vec::new();
         let mut bls_pubkey_to_rank_map = HashMap::new();
-        for (rank, (pubkey, bls_pubkey, stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
+        for (rank, (pubkey, bls_pubkey_compressed, bls_pubkey, stake)) in
+            pubkey_stake_pair_vec.into_iter().enumerate()
+        {
             let entry = BLSPubkeyStakeEntry {
                 pubkey,
                 bls_pubkey,
                 stake,
             };
             sorted_pubkeys.push(entry);
-            bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
+            bls_pubkey_to_rank_map.insert(bls_pubkey_compressed, rank as u16);
         }
         Self {
             rank_map: bls_pubkey_to_rank_map,
@@ -94,8 +114,9 @@ impl BLSPubkeyToRankMap {
         self.rank_map.len()
     }
 
-    pub fn get_rank(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
-        self.rank_map.get(bls_pubkey)
+    pub fn get_rank(&self, bls_pubkey: &BLSPubkeyAffine) -> Option<&u16> {
+        let bls_pubkey_compressed = BLSPubkeyCompressed(bls_pubkey.to_bytes_compressed());
+        self.rank_map.get(&bls_pubkey_compressed)
     }
 
     pub fn get_pubkey_and_stake(&self, index: usize) -> Option<&BLSPubkeyStakeEntry> {
@@ -454,7 +475,7 @@ pub(crate) mod tests {
         assert_eq!(bls_pubkey_to_rank_map.len(), num_vote_accounts);
         for (pubkey, (stake, vote_account)) in epoch_vote_accounts {
             let vote_state_view = vote_account.vote_state_view();
-            let bls_pubkey = bls_pubkey_compressed_bytes_to_bls_pubkey(
+            let (_comp, bls_pubkey) = bls_pubkey_compressed_bytes_to_bls_pubkey(
                 vote_state_view.bls_pubkey_compressed().unwrap(),
             )
             .unwrap();

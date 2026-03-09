@@ -1,4 +1,5 @@
 use {
+    agave_votor::event::VotorEvent,
     crossbeam_channel::Sender,
     jsonrpc_core::{BoxFuture, ErrorCode, MetaIoHandler, Metadata, Result},
     jsonrpc_core_client::{transports::ipc, RpcError},
@@ -24,7 +25,6 @@ use {
     solana_rpc_client_api::{config::RpcAccountIndex, custom_error::RpcCustomError},
     solana_signer::Signer,
     solana_validator_exit::Exit,
-    solana_votor::event::VotorEvent,
     std::{
         collections::{HashMap, HashSet},
         env, error,
@@ -981,6 +981,7 @@ pub fn load_staked_nodes_overrides(
 mod tests {
     use {
         super::*,
+        agave_votor::event::VotorEventSender,
         serde_json::Value,
         solana_account::{Account, AccountSharedData},
         solana_accounts_db::{
@@ -1011,7 +1012,6 @@ mod tests {
         solana_streamer::socket::SocketAddrSpace,
         solana_system_interface::program as system_program,
         solana_tpu_client::tpu_client::DEFAULT_TPU_ENABLE_UDP,
-        solana_votor::event::VotorEventSender,
         spl_generic_token::token,
         spl_token_2022_interface::state::{
             Account as TokenAccount, AccountState as TokenAccountState, Mint,

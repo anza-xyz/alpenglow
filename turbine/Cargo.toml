@@ -14,6 +14,8 @@ agave-unstable-api = []
 
 [dependencies]
 agave-feature-set = { workspace = true }
+agave-votor = { workspace = true }
+agave-votor-messages = { workspace = true }
 agave-xdp = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
@@ -56,8 +58,6 @@ solana-system-transaction = { workspace = true }
 solana-time-utils = { workspace = true }
 solana-tls-utils = { workspace = true }
 solana-transaction-error = { workspace = true }
-solana-votor = { workspace = true }
-solana-votor-messages = { workspace = true }
 static_assertions = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -67,6 +67,7 @@ caps = { workspace = true }
 
 [dev-dependencies]
 agave-logger = { workspace = true }
+agave-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 assert_matches = { workspace = true }
 bencher = { workspace = true }
 bs58 = { workspace = true }
@@ -77,7 +78,6 @@ solana-runtime = { workspace = true, features = ["dev-context-only-utils"] }
 solana-signature = { workspace = true, features = ["rand"] }
 solana-transaction = { workspace = true }
 solana-turbine = { path = ".", features = ["agave-unstable-api"] }
-solana-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 test-case = { workspace = true }
 
 [[bench]]

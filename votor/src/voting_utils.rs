@@ -6,10 +6,13 @@ use {
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         voting_service::BLSOp,
     },
+    agave_votor_messages::{
+        consensus_message::{ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        vote::Vote,
+    },
     crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{
         keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed, BlsError,
-        Pubkey as BLSPubkey,
     },
     solana_clock::Slot,
     solana_keypair::Keypair,
@@ -17,10 +20,6 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_signer::Signer,
     solana_transaction::Transaction,
-    solana_votor_messages::{
-        consensus_message::{ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
-        vote::Vote,
-    },
     std::{collections::HashMap, sync::Arc},
     thiserror::Error,
 };
@@ -216,7 +215,7 @@ pub fn generate_vote_tx(
 
     let bls_keypair = get_or_insert_bls_keypair(derived_bls_keypairs, &authorized_voter_keypair)
         .unwrap_or_else(|e| panic!("Failed to derive my own BLS keypair: {e:?}"));
-    let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
+    let my_bls_pubkey = bls_keypair.public;
     if my_bls_pubkey != bls_pubkey_in_vote_account {
         panic!(
             "Vote account bls_pubkey mismatch: {bls_pubkey_in_vote_account:?} (expected: \

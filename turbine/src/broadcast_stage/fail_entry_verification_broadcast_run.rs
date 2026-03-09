@@ -1,11 +1,11 @@
 use {
     super::*,
     crate::cluster_nodes::ClusterNodesCache,
+    agave_votor::event::VotorEventSender,
     solana_entry::block_component::BlockComponent,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
-    solana_votor::event::VotorEventSender,
     std::{thread::sleep, time::Duration},
     tokio::sync::mpsc::Sender as AsyncSender,
 };

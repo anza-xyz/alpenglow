@@ -2,12 +2,12 @@ use {
     super::vote_history_storage::{
         Result, SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage,
     },
+    agave_votor_messages::{consensus_message::Block, vote::Vote},
     serde::{Deserialize, Serialize},
     solana_clock::Slot,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_pubkey::Pubkey,
-    solana_votor_messages::{consensus_message::Block, vote::Vote},
     std::collections::{hash_map::Entry, HashMap, HashSet},
     thiserror::Error,
 };
@@ -47,7 +47,7 @@ impl VoteHistoryVersions {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "9h5xLzJWKtwn1wLAaGbDUsSVJawLdNfi7jVzcFBP86S6")
+    frozen_abi(digest = "9dp4rEVqAsT7mfiL5oEgWrxgWCUiEe4Fk8xJoTWwSN1X")
 )]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct VoteHistory {

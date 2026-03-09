@@ -17,6 +17,7 @@ use {
         replay_stage::{HeaviestForkFailures, ReplayStage, TowerBFTStructures},
         unfrozen_gossip_verified_vote_hashes::UnfrozenGossipVerifiedVoteHashes,
     },
+    agave_votor_messages::migration::MigrationStatus,
     crossbeam_channel::unbounded,
     solana_clock::Slot,
     solana_hash::Hash,
@@ -31,7 +32,6 @@ use {
     solana_signer::Signer,
     solana_vote::vote_transaction,
     solana_vote_program::vote_state::{Lockout, TowerSync},
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::{HashMap, HashSet, VecDeque},
         sync::{Arc, RwLock},

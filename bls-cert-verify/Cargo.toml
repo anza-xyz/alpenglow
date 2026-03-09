@@ -10,19 +10,19 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+agave-votor-messages = { workspace = true }
 bitvec = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 solana-bls-signatures = { workspace = true, features = ["parallel"] }
 solana-signer-store = { workspace = true }
-solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
 wincode = { workspace = true }
 
 [dev-dependencies]
+agave-votor = { path = "../votor" }
 criterion = { workspace = true }
 solana-hash = { workspace = true }
-solana-votor = { workspace = true }
 
 [[bench]]
 name = "cert_verify"

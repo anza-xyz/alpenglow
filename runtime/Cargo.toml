@@ -55,6 +55,7 @@ agave-feature-set = { workspace = true }
 agave-precompiles = { workspace = true }
 agave-reserved-account-keys = { workspace = true }
 agave-syscalls = { workspace = true }
+agave-votor-messages = { workspace = true }
 ahash = { workspace = true }
 aquamarine = { workspace = true }
 arc-swap = { workspace = true }
@@ -180,7 +181,6 @@ solana-version = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-interface = { workspace = true }
 solana-vote-program = { workspace = true }
-solana-votor-messages = { workspace = true }
 spl-generic-token = { workspace = true }
 static_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
@@ -194,6 +194,7 @@ zstd = { workspace = true }
 [dev-dependencies]
 agave-logger = { workspace = true }
 agave-transaction-view = { workspace = true }
+agave-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 bitvec = { workspace = true }
 ed25519-dalek = { workspace = true }
 libsecp256k1 = { workspace = true }
@@ -218,7 +219,6 @@ solana-svm = { workspace = true, features = ["dev-context-only-utils"] }
 solana-transaction-context = { workspace = true, features = [
     "dev-context-only-utils",
 ] }
-solana-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 static_assertions = { workspace = true }
 test-case = { workspace = true }
 

@@ -104,8 +104,8 @@ mod tests {
         crate::consensus_rewards::entry::tests::{
             get_rank_map_keypairs, new_vote, validate_bitmap,
         },
+        agave_votor_messages::{consensus_message::VoteMessage, vote::Vote},
         solana_bls_signatures::Keypair as BlsKeypair,
-        solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     };
 
     fn new_invalid_vote(vote: Vote, rank: usize) -> VoteMessage {
