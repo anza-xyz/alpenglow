@@ -63,16 +63,14 @@ pub(super) fn calculate_and_pay_voting_reward(
             },
         )?;
         let current_slot_leader_vote_pubkey =
-            match convert_node_pubkey_to_vote_pubkey(epoch_stakes, *bank.collector_id()) {
-                Ok(p) => Some(p),
-                Err(e) => {
+            convert_node_pubkey_to_vote_pubkey(epoch_stakes, *bank.collector_id())
+                .inspect_err(|e| {
                     info!(
                         "Converting current slot leader's node pubkey to vote pubkey failed with \
                          {e}.  It will not be paid"
                     );
-                    None
-                }
-            };
+                })
+                .ok();
         (
             epoch_stakes.stakes().vote_accounts().as_ref(),
             epoch_stakes.total_stake(),
@@ -153,6 +151,8 @@ pub(super) fn calculate_and_pay_voting_reward(
 }
 
 /// Computes the voting reward in Lamports.
+///
+/// Returns `(validator rewards, leader rewards)`.
 fn calculate_reward(
     epoch_state: &EpochInflationState,
     total_stake_lamports: u64,
@@ -178,15 +178,21 @@ fn calculate_reward(
     (validator_reward_lamports, leader_reward_lamports)
 }
 
-fn pay_reward(epoch: Epoch, account: &VoteAccount, reward: u64) -> Option<AccountSharedData> {
+/// Pays `reward` to `account` in `current_epoch`.
+///
+/// TODO: this is using VoteStateV4 explicitly.  When we upstream, we will use VoteStateHandle API.
+fn pay_reward(
+    current_epoch: Epoch,
+    account: &VoteAccount,
+    reward: u64,
+) -> Option<AccountSharedData> {
     let data = account.account().data();
-    // TODO (akhi): this is a stop gap till we upstream.
     let Ok(vote_state_versions) = bincode::deserialize(data) else {
         return None;
     };
     match vote_state_versions {
         VoteStateVersions::V4(mut vote_state) => {
-            increment_credits(&mut vote_state, epoch, reward);
+            increment_credits(&mut vote_state, current_epoch, reward);
             let mut paid_account = AccountSharedData::new(
                 account.lamports(),
                 account.account().data().len(),
@@ -201,7 +207,9 @@ fn pay_reward(epoch: Epoch, account: &VoteAccount, reward: u64) -> Option<Accoun
     }
 }
 
-// TODO (akhi): this is a stop gap till we upstream.  We want to use the `VoteStateHandler` API.
+/// We store rewards as credits in the current vote state.
+///
+/// TODO: this is using VoteStateV4 explicitly.  When we upstream, we will use VoteStateHandle API.
 fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
     // never seen a credit
     if vote_state.epoch_credits.is_empty() {
