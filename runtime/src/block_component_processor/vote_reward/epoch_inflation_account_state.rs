@@ -52,14 +52,6 @@ impl EpochInflationState {
             epoch: bank.epoch(),
         }
     }
-
-    fn new_empty(epoch: Epoch, slots_per_epoch: u64) -> Self {
-        Self {
-            max_possible_validator_reward: 0,
-            epoch,
-            slots_per_epoch,
-        }
-    }
 }
 
 /// The state stored in the off curve account used to store metadata for calculating and paying
@@ -68,32 +60,26 @@ impl EpochInflationState {
 /// Info for the previous and the current epoch is stored.
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct EpochInflationAccountState {
+    /// [`EpochInflationState`] for the current epoch.
     pub(super) current: EpochInflationState,
-    pub(super) prev: EpochInflationState,
+    /// [`EpochInflationState`] for the previous epoch.  This is needed for scenarios when the
+    /// reward slot is in a previous epoch relative to the current slot.
+    ///
+    /// Stored in an `Option` because in the first epoch when Alpenglow is enabled, we will not
+    /// have any state for the previous epoch.
+    pub(super) prev: Option<EpochInflationState>,
 }
 
 impl EpochInflationAccountState {
-    fn get_initial_state(current_epoch: Epoch, slots_per_epoch: u64) -> Self {
-        let current = EpochInflationState::new_empty(current_epoch, slots_per_epoch);
-        let prev = EpochInflationState::new_empty(current_epoch.saturating_sub(1), slots_per_epoch);
-        Self { current, prev }
-    }
-
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
-    pub(super) fn new_from_bank(bank: &Bank) -> Self {
-        match bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR) {
-            None => {
-                // this can happen in the first epoch when the account has not been created yet.
-                // we create a dummy state to handle this case with the assumption that this code
-                // will become active in an epoch before the epoch in which Alpenglow is activated.
-                Self::get_initial_state(bank.epoch(), bank.epoch_schedule.slots_per_epoch)
-            }
-            Some(acct) => {
-                // unwrap should be safe as the data being deserialized was serialized by us in
-                // [`Self::set_state`].
-                acct.deserialize_data().unwrap()
-            }
-        }
+    ///
+    /// Returns `None` if the `bank` does not contain the account.
+    pub(super) fn new_from_bank(bank: &Bank) -> Option<Self> {
+        bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR).map(|acct| {
+            // unwrap should be safe as the data being deserialized was serialized by us in
+            // [`Self::set_state`].
+            acct.deserialize_data().unwrap()
+        })
     }
 
     /// Serializes and updates [`Self`] into the accounts in the [`Bank`].
@@ -108,44 +94,44 @@ impl EpochInflationAccountState {
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
     }
 
-    /// Calculates and serializes a new version of [`Self`] into the accounts in the [`Bank`]
-    /// when  a new epoch starts.   At the start of a new epoch, over several slots we pay the
-    /// inflation rewards from the previous epoch.  This is called Partitioned Epoch Rewards
-    /// (PER).  As such, the capitalization keeps increasing in the first slots of the epoch.
-    /// Vote rewards are calculated as a function of the capitalization and we do not want
-    /// voting in the initial slots  to earn less rewards than voting in the later rewards.  As
-    /// such this function is called with [`additional_validator_rewards`] which should be the
-    /// total rewards that will be paid by PER and we use the capitalization from the previous
-    /// epoch plus this value to compute the vote rewards.
+    /// Computes a new version of `Self` for `bank.epoch` and serializes it into accounts in the `bank`.
+    ///
+    /// At the start of a new epoch, over several slots we pay the inflation rewards from the
+    /// previous epoch.  This is called Partitioned Epoch Rewards (PER).  As such, the
+    /// capitalization keeps increasing in the first slots of the epoch.  Vote rewards are
+    /// calculated as a function of the capitalization and we do not want voting in the initial
+    /// slots to earn less rewards than voting in the later rewards.  As such this function is
+    /// called with [`additional_validator_rewards`] which should be the total rewards that will
+    /// be paid by PER and we use the capitalization from the previous epoch plus this value to
+    /// compute the vote rewards.
     pub(crate) fn new_epoch_update_account(
         bank: &Bank,
         prev_epoch: Epoch,
         prev_epoch_capitalization: u64,
         additional_validator_rewards: u64,
     ) {
-        let prev_state = Self::new_from_bank(bank);
+        let prev = Self::new_from_bank(bank).map(|s| s.current);
         let current = EpochInflationState::new_from_bank(
             bank,
             prev_epoch,
             prev_epoch_capitalization,
             additional_validator_rewards,
         );
-        let state = Self {
-            prev: prev_state.current,
-            current,
-        };
+        let state = Self { prev, current };
         state.set_state(bank);
     }
 
     /// Returns the [`EpochState`] corresponding to the given `epoch`.
     pub(super) fn get_epoch_state(self, epoch: Epoch) -> Option<EpochInflationState> {
         if self.current.epoch == epoch {
-            Some(self.current)
-        } else if self.prev.epoch == epoch {
-            Some(self.prev)
-        } else {
-            None
+            return Some(self.current);
         }
+        if let Some(prev) = self.prev {
+            if prev.epoch == epoch {
+                return Some(prev);
+            }
+        }
+        None
     }
 
     /// Returns the amount of lamports needed to store this account.
@@ -158,7 +144,7 @@ impl EpochInflationAccountState {
         };
         let state = Self {
             current: epoch_state.clone(),
-            prev: epoch_state,
+            prev: None,
         };
         let account_size = bincode::serialized_size(&state).unwrap();
         bank.rent_collector()
@@ -174,11 +160,7 @@ mod tests {
     fn get_rand_state() -> EpochInflationAccountState {
         let mut rng = rand::thread_rng();
         EpochInflationAccountState {
-            prev: EpochInflationState {
-                max_possible_validator_reward: rng.gen(),
-                slots_per_epoch: rng.gen(),
-                epoch: rng.gen(),
-            },
+            prev: None,
             current: EpochInflationState {
                 max_possible_validator_reward: rng.gen(),
                 slots_per_epoch: rng.gen(),
@@ -188,22 +170,11 @@ mod tests {
     }
 
     #[test]
-    fn new_from_bank_works() {
-        let bank = Bank::new_for_tests(&GenesisConfig::default());
-        let expected = EpochInflationAccountState::get_initial_state(
-            bank.epoch(),
-            bank.epoch_schedule.slots_per_epoch,
-        );
-        let state = EpochInflationAccountState::new_from_bank(&bank);
-        assert_eq!(state, expected);
-    }
-
-    #[test]
     fn set_state_works() {
         let bank = Bank::new_for_tests(&GenesisConfig::default());
         let state = get_rand_state();
         state.set_state(&bank);
-        let deserialized = EpochInflationAccountState::new_from_bank(&bank);
+        let deserialized = EpochInflationAccountState::new_from_bank(&bank).unwrap();
         assert_eq!(state, deserialized);
     }
 
@@ -243,8 +214,8 @@ mod tests {
             0,
         );
         let EpochInflationAccountState { current, prev } =
-            EpochInflationAccountState::new_from_bank(&bank_epoch_2);
+            EpochInflationAccountState::new_from_bank(&bank_epoch_2).unwrap();
         assert_eq!(current, expected_current);
-        assert_eq!(prev, expected_prev);
+        assert_eq!(prev.unwrap(), expected_prev);
     }
 }
