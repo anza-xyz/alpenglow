@@ -3,7 +3,7 @@
 use {
     super::standard_repair_handler::StandardRepairHandler,
     crate::{
-        cluster_info_vote_listener::VerifiedVoteReceiver,
+        cluster_info_vote_listener::VerifiedVoterSlotsReceiver,
         cluster_slots_service::cluster_slots::ClusterSlots,
         repair::{
             ancestor_hashes_service::{
@@ -392,7 +392,7 @@ impl Default for RepairSlotRange {
 
 struct RepairChannels {
     repair_request_quic_sender: AsyncSender<(SocketAddr, Bytes)>,
-    verified_vote_receiver: VerifiedVoteReceiver,
+    verified_vote_receiver: VerifiedVoterSlotsReceiver,
     dumped_slots_receiver: DumpedSlotsReceiver,
     popular_pruned_forks_sender: PopularPrunedForksSender,
 }
@@ -405,7 +405,7 @@ pub struct RepairServiceChannels {
 impl RepairServiceChannels {
     pub fn new(
         repair_request_quic_sender: AsyncSender<(SocketAddr, Bytes)>,
-        verified_vote_receiver: VerifiedVoteReceiver,
+        verified_vote_receiver: VerifiedVoterSlotsReceiver,
         dumped_slots_receiver: DumpedSlotsReceiver,
         popular_pruned_forks_sender: PopularPrunedForksSender,
         ancestor_hashes_request_quic_sender: AsyncSender<(SocketAddr, Bytes)>,
@@ -495,7 +495,7 @@ impl RepairService {
         repair_weight: &mut RepairWeight,
         popular_pruned_forks_requests: &mut HashSet<Slot>,
         dumped_slots_receiver: &DumpedSlotsReceiver,
-        verified_vote_receiver: &VerifiedVoteReceiver,
+        verified_vote_receiver: &VerifiedVoterSlotsReceiver,
         repair_metrics: &mut RepairMetrics,
     ) {
         // Purge outdated slots from the weighting heuristic

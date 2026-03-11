@@ -7,7 +7,7 @@ use {
         errors::SigVerifyError,
         stats::{SigVerifierStats, StreamerRecvStats},
     },
-    crate::cluster_info_vote_listener::VerifiedVoteSender,
+    crate::cluster_info_vote_listener::VerifiedVoterSlotsSender,
     agave_votor::{
         consensus_metrics::ConsensusMetricsEventSender,
         consensus_rewards::{self},
@@ -46,7 +46,7 @@ pub(crate) fn spawn_service(
     exit: Arc<AtomicBool>,
     packet_receiver: Receiver<PacketBatch>,
     sharable_banks: SharableBanks,
-    channel_to_repair: VerifiedVoteSender,
+    channel_to_repair: VerifiedVoterSlotsSender,
     channel_to_reward: Sender<AddVoteMessage>,
     channel_to_pool: Sender<Vec<ConsensusMessage>>,
     channel_to_metrics: ConsensusMetricsEventSender,
@@ -75,7 +75,7 @@ pub(crate) fn spawn_service(
 
 struct SigVerifier {
     /// Channel to send msgs to repair on.
-    channel_to_repair: VerifiedVoteSender,
+    channel_to_repair: VerifiedVoterSlotsSender,
     /// Channel to send msgs to consensus rewards container to.
     channel_to_reward: Sender<AddVoteMessage>,
     /// Channel to send msgs to consensus pool to.
@@ -101,7 +101,7 @@ struct SigVerifier {
 impl SigVerifier {
     fn new(
         sharable_banks: SharableBanks,
-        channel_to_repair: VerifiedVoteSender,
+        channel_to_repair: VerifiedVoterSlotsSender,
         channel_to_reward: Sender<AddVoteMessage>,
         channel_to_pool: Sender<Vec<ConsensusMessage>>,
         channel_to_metrics: ConsensusMetricsEventSender,
@@ -311,7 +311,7 @@ mod tests {
         super::*,
         crate::{
             bls_sigverify::stats::STATS_INTERVAL_DURATION,
-            cluster_info_vote_listener::VerifiedVoteReceiver,
+            cluster_info_vote_listener::VerifiedVoterSlotsReceiver,
         },
         agave_votor::consensus_pool::certificate_builder::CertificateBuilder,
         agave_votor_messages::{
@@ -339,7 +339,7 @@ mod tests {
     };
 
     fn create_keypairs_and_bls_sig_verifier_with_channels(
-        votes_for_repair_sender: VerifiedVoteSender,
+        votes_for_repair_sender: VerifiedVoterSlotsSender,
         message_sender: Sender<Vec<ConsensusMessage>>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         reward_votes_sender: Sender<AddVoteMessage>,
@@ -387,7 +387,7 @@ mod tests {
     fn create_keypairs_and_bls_sig_verifier() -> (
         Vec<ValidatorVoteKeypairs>,
         SigVerifier,
-        VerifiedVoteReceiver,
+        VerifiedVoterSlotsReceiver,
         Receiver<Vec<ConsensusMessage>>,
     ) {
         let (votes_for_repair_sender, votes_for_repair_receiver) = crossbeam_channel::unbounded();

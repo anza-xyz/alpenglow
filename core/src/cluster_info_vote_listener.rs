@@ -57,8 +57,8 @@ use {
 pub type ThresholdConfirmedSlots = Vec<(Slot, Hash)>;
 pub type VerifiedVoteTransactionsSender = Sender<Vec<Transaction>>;
 pub type VerifiedVoteTransactionsReceiver = Receiver<Vec<Transaction>>;
-pub type VerifiedVoteSender = Sender<(Pubkey, Vec<Slot>)>;
-pub type VerifiedVoteReceiver = Receiver<(Pubkey, Vec<Slot>)>;
+pub type VerifiedVoterSlotsSender = Sender<(Pubkey, Vec<Slot>)>;
+pub type VerifiedVoterSlotsReceiver = Receiver<(Pubkey, Vec<Slot>)>;
 pub type GossipVerifiedVoteHashSender = Sender<(Pubkey, Slot, Hash)>;
 pub type GossipVerifiedVoteHashReceiver = Receiver<(Pubkey, Slot, Hash)>;
 pub type DuplicateConfirmedSlotsSender = Sender<ThresholdConfirmedSlots>;
@@ -193,7 +193,7 @@ impl ClusterInfoVoteListener {
         vote_tracker: Arc<VoteTracker>,
         bank_forks: Arc<RwLock<BankForks>>,
         subscriptions: Option<Arc<RpcSubscriptions>>,
-        verified_vote_sender: VerifiedVoteSender,
+        verified_vote_sender: VerifiedVoterSlotsSender,
         gossip_verified_vote_hash_sender: GossipVerifiedVoteHashSender,
         replay_votes_receiver: ReplayVoteReceiver,
         blockstore: Arc<Blockstore>,
@@ -321,7 +321,7 @@ impl ClusterInfoVoteListener {
         dumped_slot_subscription: DumpedSlotSubscription,
         subscriptions: Option<&RpcSubscriptions>,
         gossip_verified_vote_hash_sender: GossipVerifiedVoteHashSender,
-        verified_vote_sender: VerifiedVoteSender,
+        verified_vote_sender: VerifiedVoterSlotsSender,
         replay_votes_receiver: ReplayVoteReceiver,
         blockstore: Arc<Blockstore>,
         bank_notification_sender: Option<BankNotificationSenderConfig>,
@@ -400,7 +400,7 @@ impl ClusterInfoVoteListener {
         root_bank: &Bank,
         subscriptions: Option<&RpcSubscriptions>,
         gossip_verified_vote_hash_sender: &GossipVerifiedVoteHashSender,
-        verified_vote_sender: &VerifiedVoteSender,
+        verified_vote_sender: &VerifiedVoterSlotsSender,
         replay_votes_receiver: &ReplayVoteReceiver,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slot_sender: &Option<DuplicateConfirmedSlotsSender>,
@@ -457,7 +457,7 @@ impl ClusterInfoVoteListener {
         vote_tracker: &VoteTracker,
         root_bank: &Bank,
         rpc_subscriptions: Option<&RpcSubscriptions>,
-        verified_vote_sender: &VerifiedVoteSender,
+        verified_vote_sender: &VerifiedVoterSlotsSender,
         gossip_verified_vote_hash_sender: &GossipVerifiedVoteHashSender,
         diff: &mut HashMap<Slot, HashMap<Pubkey, bool>>,
         new_optimistic_confirmed_slots: &mut ThresholdConfirmedSlots,
@@ -621,7 +621,7 @@ impl ClusterInfoVoteListener {
         root_bank: &Bank,
         subscriptions: Option<&RpcSubscriptions>,
         gossip_verified_vote_hash_sender: &GossipVerifiedVoteHashSender,
-        verified_vote_sender: &VerifiedVoteSender,
+        verified_vote_sender: &VerifiedVoterSlotsSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slot_sender: &Option<DuplicateConfirmedSlotsSender>,
         vote_processing_time: &mut Option<VoteProcessingTiming>,

@@ -2,7 +2,7 @@
 use qualifier_attr::qualifiers;
 use {
     super::{errors::SigVerifyVoteError, stats::SigVerifyVoteStats},
-    crate::cluster_info_vote_listener::VerifiedVoteSender,
+    crate::cluster_info_vote_listener::VerifiedVoterSlotsSender,
     agave_votor::{
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
         consensus_rewards,
@@ -63,7 +63,7 @@ pub(super) fn verify_and_send_votes(
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
-    channel_to_repair: &VerifiedVoteSender,
+    channel_to_repair: &VerifiedVoterSlotsSender,
     channel_to_reward: &Sender<AddVoteMessage>,
     channel_to_metrics: &ConsensusMetricsEventSender,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
@@ -241,7 +241,7 @@ fn send_votes_to_pool(
 
 fn send_votes_to_repair(
     votes: HashMap<Pubkey, Vec<Slot>>,
-    channel: &VerifiedVoteSender,
+    channel: &VerifiedVoterSlotsSender,
     stats: &mut SigVerifyVoteStats,
 ) -> Result<(), SigVerifyVoteError> {
     for (pubkey, slots) in votes {

@@ -9,7 +9,7 @@ use {
         banking_trace::{Channels, TracerThread},
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
-            VerifiedVoteSender, VoteTracker,
+            VerifiedVoterSlotsSender, VoteTracker,
         },
         ed25519_sigverifier::TransactionSigVerifier,
         fetch_stage::FetchStage,
@@ -131,7 +131,7 @@ impl Tpu {
         shred_version: u16,
         vote_tracker: Arc<VoteTracker>,
         bank_forks: Arc<RwLock<BankForks>>,
-        verified_vote_sender: VerifiedVoteSender,
+        verified_vote_sender: VerifiedVoterSlotsSender,
         gossip_verified_vote_hash_sender: GossipVerifiedVoteHashSender,
         replay_vote_receiver: ReplayVoteReceiver,
         replay_vote_sender: ReplayVoteSender,
