@@ -1,8 +1,10 @@
 use {
     crate::bank::{Bank, EpochInflationRewards},
-    solana_account::AccountSharedData,
+    solana_account::{Account, AccountSharedData},
     solana_clock::Epoch,
+    solana_genesis_config::GenesisConfig,
     solana_pubkey::Pubkey,
+    solana_rent::Rent,
     solana_system_interface::program as system_program,
     std::sync::LazyLock,
 };
@@ -76,9 +78,8 @@ impl EpochInflationAccountState {
     /// Returns `None` if the `bank` does not contain the account.
     pub(super) fn new_from_bank(bank: &Bank) -> Option<Self> {
         bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR).map(|acct| {
-            // unwrap should be safe as the data being deserialized was serialized by us in
-            // [`Self::set_state`].
-            acct.deserialize_data().unwrap()
+            acct.deserialize_data()
+                .expect("should deserialize as we serialized the data in Self::set_state()")
         })
     }
 
@@ -92,6 +93,25 @@ impl EpochInflationAccountState {
             .minimum_balance(account_size.try_into().unwrap());
         let account = AccountSharedData::new_data(lamports, &self, &system_program::ID).unwrap();
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
+    }
+
+    /// Inserts a dummy account for [`Self`] into the `genesis_config` to aid local cluster testing.
+    pub(crate) fn insert_into_genesis_config(genesis_config: &mut GenesisConfig) {
+        let current = EpochInflationState {
+            max_possible_validator_reward: 0,
+            slots_per_epoch: genesis_config.epoch_schedule.slots_per_epoch,
+            epoch: 0,
+        };
+        let account = Self {
+            current,
+            prev: None,
+        };
+        let account_size = bincode::serialized_size(&account).unwrap();
+        let lamports = Rent::default().minimum_balance(account_size.try_into().unwrap());
+        let account = Account::new_data(lamports, &account, &system_program::ID).unwrap();
+        genesis_config
+            .accounts
+            .insert(*VOTE_REWARD_ACCOUNT_ADDR, account);
     }
 
     /// Computes a new version of `Self` for `bank.epoch` and serializes it into accounts in the `bank`.

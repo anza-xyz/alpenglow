@@ -1,4 +1,5 @@
 use {
+    crate::block_component_processor::vote_reward::epoch_inflation_account_state::EpochInflationAccountState,
     agave_feature_set::{FeatureSet, FEATURE_NAMES},
     agave_votor_messages::{
         self,
@@ -323,6 +324,9 @@ pub fn activate_all_features_alpenglow(genesis_config: &mut GenesisConfig) {
     genesis_config
         .accounts
         .insert(*GENESIS_CERTIFICATE_ACCOUNT, certificate_account);
+
+    // Similarly, also insert an epoch inflation account.
+    EpochInflationAccountState::insert_into_genesis_config(genesis_config);
 }
 
 pub fn activate_all_features(genesis_config: &mut GenesisConfig) {

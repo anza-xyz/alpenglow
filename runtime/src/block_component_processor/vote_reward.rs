@@ -1,7 +1,7 @@
 use {
     crate::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     epoch_inflation_account_state::{EpochInflationAccountState, EpochInflationState},
-    log::{error, info, warn},
+    log::{error, info},
     solana_account::{AccountSharedData, ReadableAccount},
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
@@ -15,6 +15,8 @@ pub(crate) mod epoch_inflation_account_state;
 /// Different types of errors that can happen when calculating and paying voting reward.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum PayVoteRewardError {
+    #[error("missing EpochInflationAccountState for current slot {current_slot}")]
+    MissingEpochInflationAccountState { current_slot: Slot },
     #[error("missing epoch stakes for reward_slot {reward_slot} in current_slot {current_slot}")]
     MissingEpochStakes {
         reward_slot: Slot,
@@ -83,27 +85,16 @@ pub(super) fn calculate_and_pay_voting_reward(
     let reward_epoch = bank.epoch_schedule.get_epoch(reward_slot);
     let epoch_state = {
         let epoch_inflation_account_state = EpochInflationAccountState::new_from_bank(bank);
-        // In production, this function should only be called after alpenglow is active and
-        // the slot in the the epoch that activated Alpenglow should have created the account.
-        // However, various tests can call this function before the code to create the account has
-        // had a chance to run.
-        // Print a warning if the account was not created and use an empty epoch_state.
-        match epoch_inflation_account_state {
-            Some(e) => e.get_epoch_state(reward_epoch).ok_or(
-                PayVoteRewardError::NoEpochValidatorStake {
-                    reward_epoch,
-                    current_slot,
-                },
-            )?,
-            None => {
-                warn!("EpochInflationAccountState does not exist, ensure this is a test");
-                EpochInflationState {
-                    max_possible_validator_reward: 0,
-                    slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
-                    epoch: bank.epoch(),
-                }
-            }
-        }
+        // This function should only be called after alpenglow is active and the slot in the the epoch
+        // that activated Alpenglow should have created the account.
+        debug_assert!(epoch_inflation_account_state.is_some());
+        epoch_inflation_account_state
+            .ok_or(PayVoteRewardError::MissingEpochInflationAccountState { current_slot })?
+            .get_epoch_state(reward_epoch)
+            .ok_or(PayVoteRewardError::NoEpochValidatorStake {
+                reward_epoch,
+                current_slot,
+            })?
     };
 
     let current_vote_accounts = bank.vote_accounts();
