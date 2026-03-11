@@ -83,7 +83,7 @@ fn get_key_and_stakes(
         .ok_or(AddVoteError::EpochStakesNotFound(0))?;
     let Some(entry) = epoch_stakes
         .bls_pubkey_to_rank_map()
-        .get_pubkey_and_stake(rank as usize)
+        .get_pubkey_stake_entry(rank as usize)
     else {
         return Err(AddVoteError::InvalidRank(rank));
     };

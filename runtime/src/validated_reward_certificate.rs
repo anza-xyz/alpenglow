@@ -93,7 +93,7 @@ impl ValidatedRewardCert {
         let mut validators = Vec::with_capacity(max_validators);
 
         let mut rank_map = |ind: usize| {
-            rank_map.get_pubkey_and_stake(ind).map(|entry| {
+            rank_map.get_pubkey_stake_entry(ind).map(|entry| {
                 validators.push(entry.pubkey);
                 entry.bls_pubkey
             })
@@ -217,7 +217,7 @@ mod tests {
             .bls_pubkey_to_rank_map();
         let signing_keys = (0..num_validators)
             .map(|index| {
-                let pubkey_affine = rank_map.get_pubkey_and_stake(index).unwrap().bls_pubkey;
+                let pubkey_affine = rank_map.get_pubkey_stake_entry(index).unwrap().bls_pubkey;
                 keypair_map
                     .get(&BLSPubkeyCompressed::from(pubkey_affine))
                     .unwrap()

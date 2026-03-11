@@ -287,7 +287,7 @@ impl SigVerifier {
             return None;
         };
         let entry = rank_map
-            .get_pubkey_and_stake(vote.rank.into())
+            .get_pubkey_stake_entry(vote.rank.into())
             .or_else(|| {
                 self.stats.discard_vote_invalid_rank += 1;
                 None

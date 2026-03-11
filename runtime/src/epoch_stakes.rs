@@ -119,7 +119,7 @@ impl BLSPubkeyToRankMap {
         self.rank_map.get(&bls_pubkey_compressed)
     }
 
-    pub fn get_pubkey_and_stake(&self, index: usize) -> Option<&BLSPubkeyStakeEntry> {
+    pub fn get_pubkey_stake_entry(&self, index: usize) -> Option<&BLSPubkeyStakeEntry> {
         self.sorted_pubkeys.get(index)
     }
 }
@@ -482,7 +482,7 @@ pub(crate) mod tests {
             let index = bls_pubkey_to_rank_map.get_rank(&bls_pubkey).unwrap();
             assert!(index >= &0 && index < &(num_vote_accounts as u16));
             assert_eq!(
-                bls_pubkey_to_rank_map.get_pubkey_and_stake(*index as usize),
+                bls_pubkey_to_rank_map.get_pubkey_stake_entry(*index as usize),
                 Some(&BLSPubkeyStakeEntry {
                     pubkey,
                     bls_pubkey,

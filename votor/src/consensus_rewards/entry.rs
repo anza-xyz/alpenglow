@@ -181,7 +181,7 @@ mod tests {
         let rank_map = bank.get_rank_map(slot).unwrap().clone();
         let signing_keys = (0..max_validators)
             .map(|index| {
-                let pubkey_affine = rank_map.get_pubkey_and_stake(index).unwrap().bls_pubkey;
+                let pubkey_affine = rank_map.get_pubkey_stake_entry(index).unwrap().bls_pubkey;
                 keypair_map
                     .get(&BlsPubkeyCompressed::from(pubkey_affine))
                     .unwrap()
