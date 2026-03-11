@@ -5366,14 +5366,14 @@ fn test_bank_hash_consistency() {
             assert_eq!(bank.epoch(), 1);
             assert_eq!(
                 bank.hash().to_string(),
-                "BkXSWzLTbuoDp2XwjjJLSQqxBJCfDMpELf4EgwFw1xgr"
+                "HV9Wr7XVke8YYYxMnsQWYf8GnBC5PPKJyGX52raDvev8"
             );
         }
         if bank.slot == 128 {
             assert_eq!(bank.epoch(), 2);
             assert_eq!(
                 bank.hash().to_string(),
-                "FPtpvQoPHUJ7RccpGGWBHcSh3Yu3LucQfnnD7xm9MKJz"
+                "5Gp1HpKChMPo1t34WHCFM2mhWxy5s8QYFkf3FnxEAmku"
             );
             break;
         }
