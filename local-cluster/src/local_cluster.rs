@@ -6,7 +6,6 @@ use {
         validator_configs::*,
     },
     agave_votor::vote_history_storage::FileVoteHistoryStorage,
-    agave_votor_messages::migration::GENESIS_CERTIFICATE_ACCOUNT,
     itertools::izip,
     log::*,
     solana_account::{Account, AccountSharedData},
@@ -80,10 +79,8 @@ const DUMMY_SNAPSHOT_CONFIG_PATH_MARKER: &str = "dummy";
 pub enum AlpenglowMode {
     /// No alpenglow - creates regular vote accounts (V3)
     Disabled,
-    /// Full alpenglow - creates V4 vote accounts and activates alpenglow featurea and set GenesisCertificate
+    /// Full alpenglow - Activates alpenglow feature and set GenesisCertificate
     Enabled,
-    /// Pre-migration mode - creates V4 vote accounts but does NOT activate alpenglow feature or set GenesisCertificate
-    PreMigration,
 }
 
 pub struct ClusterConfig {
@@ -220,14 +217,6 @@ impl LocalCluster {
         Self::init(config, socket_addr_space, AlpenglowMode::Enabled)
     }
 
-    pub fn new_pre_migration_alpenglow(
-        config: &mut ClusterConfig,
-        socket_addr_space: SocketAddrSpace,
-    ) -> Self {
-        *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() = VoteStateTargetVersion::V4;
-        Self::init(config, socket_addr_space, AlpenglowMode::PreMigration)
-    }
-
     pub fn init(
         config: &mut ClusterConfig,
         socket_addr_space: SocketAddrSpace,
@@ -339,12 +328,6 @@ impl LocalCluster {
         let leader_pubkey = leader_keypair.pubkey();
         let leader_node = Node::new_localhost_with_pubkey(&leader_pubkey);
 
-        // For PreMigration mode, we need to create V4 vote accounts but not activate the feature
-        let is_alpenglow = matches!(
-            alpenglow_mode,
-            AlpenglowMode::Enabled | AlpenglowMode::PreMigration
-        );
-
         let GenesisConfigInfo {
             mut genesis_config,
             mint_keypair,
@@ -354,16 +337,8 @@ impl LocalCluster {
             &keys_in_genesis,
             stakes_in_genesis,
             config.cluster_type,
-            is_alpenglow,
+            matches!(alpenglow_mode, AlpenglowMode::Enabled), /* is_alpenglow */
         );
-
-        // Remove the alpenglow feature and genesis certificate for PreMigration mode
-        if alpenglow_mode == AlpenglowMode::PreMigration {
-            genesis_config
-                .accounts
-                .remove(&agave_feature_set::alpenglow::id());
-            genesis_config.accounts.remove(&GENESIS_CERTIFICATE_ACCOUNT);
-        }
 
         genesis_config.accounts.extend(
             config
