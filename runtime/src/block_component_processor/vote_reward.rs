@@ -10,7 +10,7 @@ use {
     thiserror::Error,
 };
 
-pub(crate) mod epoch_inflation_account_state;
+pub mod epoch_inflation_account_state;
 
 /// Different types of errors that can happen when calculating and paying voting reward.
 #[derive(Debug, PartialEq, Eq, Error)]

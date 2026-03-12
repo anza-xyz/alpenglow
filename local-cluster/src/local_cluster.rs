@@ -37,6 +37,7 @@ use {
     solana_rent::Rent,
     solana_rpc_client::rpc_client::RpcClient,
     solana_runtime::{
+        block_component_processor::vote_reward::epoch_inflation_account_state::EpochInflationAccountState,
         genesis_utils::{
             create_genesis_config_with_vote_accounts_and_cluster_type, GenesisConfigInfo,
             ValidatorVoteKeypairs,
@@ -356,6 +357,7 @@ impl LocalCluster {
             config.cluster_type,
             is_alpenglow,
         );
+        genesis_config.rent = Rent::default();
 
         // Remove the alpenglow feature and genesis certificate for PreMigration mode
         if alpenglow_mode == AlpenglowMode::PreMigration {
@@ -363,6 +365,7 @@ impl LocalCluster {
                 .accounts
                 .remove(&agave_feature_set::alpenglow::id());
             genesis_config.accounts.remove(&GENESIS_CERTIFICATE_ACCOUNT);
+            EpochInflationAccountState::remove_from_genesis_config(&mut genesis_config);
         }
 
         genesis_config.accounts.extend(

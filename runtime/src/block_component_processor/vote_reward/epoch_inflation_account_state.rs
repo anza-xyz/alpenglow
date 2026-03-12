@@ -61,7 +61,7 @@ impl EpochInflationState {
 ///
 /// Info for the previous and the current epoch is stored.
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub(crate) struct EpochInflationAccountState {
+pub struct EpochInflationAccountState {
     /// [`EpochInflationState`] for the current epoch.
     pub(super) current: EpochInflationState,
     /// [`EpochInflationState`] for the previous epoch.  This is needed for scenarios when the
@@ -112,6 +112,10 @@ impl EpochInflationAccountState {
         genesis_config
             .accounts
             .insert(*VOTE_REWARD_ACCOUNT_ADDR, account);
+    }
+
+    pub fn remove_from_genesis_config(genesis_config: &mut GenesisConfig) {
+        genesis_config.accounts.remove(&VOTE_REWARD_ACCOUNT_ADDR);
     }
 
     /// Computes a new version of `Self` for `bank.epoch` and serializes it into accounts in the `bank`.
