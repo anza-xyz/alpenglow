@@ -174,6 +174,7 @@ impl EpochInflationAccountState {
         bank.rent_collector()
             .rent
             .minimum_balance(account_size as usize)
+            .max(1)
     }
 }
 

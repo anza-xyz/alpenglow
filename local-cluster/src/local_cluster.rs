@@ -226,9 +226,7 @@ impl LocalCluster {
         socket_addr_space: SocketAddrSpace,
     ) -> Self {
         *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() = VoteStateTargetVersion::V4;
-        let mut ret = Self::init(config, socket_addr_space, AlpenglowMode::PreMigration);
-        ret.genesis_config.rent = Rent::default();
-        ret
+        Self::init(config, socket_addr_space, AlpenglowMode::PreMigration)
     }
 
     pub fn init(
