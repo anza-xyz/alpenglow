@@ -59,8 +59,7 @@ use {
     solana_poh::{poh_controller::PohController, poh_recorder::PohRecorder},
     solana_pubkey::Pubkey,
     solana_rpc::{
-        alpenglow_last_voted::AlpenglowLastVoted, max_slots::MaxSlots,
-        optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
+        max_slots::MaxSlots, optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
         rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier,
     },
     solana_runtime::{
@@ -174,7 +173,6 @@ pub struct AlpenglowInitializationState {
     // For BLS voting service
     pub bls_connection_cache: Arc<ConnectionCache>,
     pub voting_service_test_override: Option<VotingServiceOverride>,
-    pub alpenglow_last_voted: Arc<AlpenglowLastVoted>,
 
     // For rewards
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
@@ -255,7 +253,6 @@ impl Tvu {
             alpenglow_quic_server_config,
             bls_connection_cache,
             voting_service_test_override,
-            alpenglow_last_voted,
             reward_certs_sender,
             build_reward_certs_receiver,
             highest_finalized,
@@ -328,7 +325,6 @@ impl Tvu {
             reward_votes_sender,
             consensus_message_sender.clone(),
             consensus_metrics_sender.clone(),
-            alpenglow_last_voted.clone(),
             cluster_info.clone(),
             leader_schedule_cache.clone(),
             tvu_config.bls_sigverify_threads.get(),
@@ -580,8 +576,6 @@ impl Tvu {
             bls_connection_cache,
             bank_forks.clone(),
             voting_service_test_override,
-            alpenglow_last_voted,
-            *vote_account,
         );
 
         let warm_quic_cache_service = create_cache_warmer_if_needed(
@@ -880,7 +874,6 @@ pub mod tests {
                 alpenglow_quic_server_config: QuicServerParams::default_for_tests(),
                 bls_connection_cache: Arc::new(alpenglow_connection_cache),
                 voting_service_test_override: None,
-                alpenglow_last_voted: Arc::new(AlpenglowLastVoted::default()),
                 reward_certs_sender,
                 build_reward_certs_receiver,
                 highest_finalized: Arc::new(RwLock::new(None)),

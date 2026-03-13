@@ -99,7 +99,6 @@ use {
     solana_pubkey::Pubkey,
     solana_rayon_threadlimit::get_thread_count,
     solana_rpc::{
-        alpenglow_last_voted::AlpenglowLastVoted,
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::{
             BankNotificationSenderConfig, OptimisticallyConfirmedBank,
@@ -1171,7 +1170,6 @@ impl Validator {
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks);
 
         let max_slots = Arc::new(MaxSlots::default());
-        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::default());
 
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
 
@@ -1334,7 +1332,6 @@ impl Validator {
                 max_complete_transaction_status_slot: max_complete_transaction_status_slot.clone(),
                 prioritization_fee_cache: prioritization_fee_cache.clone(),
                 client_option,
-                alpenglow_last_voted: Some(alpenglow_last_voted.clone()),
             };
             let json_rpc_service =
                 JsonRpcService::new_with_config(rpc_svc_config).map_err(ValidatorError::Other)?;
@@ -1811,7 +1808,6 @@ impl Validator {
                 alpenglow_quic_server_config,
                 bls_connection_cache,
                 voting_service_test_override: config.voting_service_test_override.clone(),
-                alpenglow_last_voted: alpenglow_last_voted.clone(),
                 reward_certs_sender,
                 build_reward_certs_receiver,
                 highest_finalized,
