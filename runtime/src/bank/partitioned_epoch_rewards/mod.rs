@@ -372,6 +372,7 @@ mod tests {
         crate::{
             bank::tests::{create_genesis_config, new_bank_from_parent_with_bank_forks},
             bank_forks::BankForks,
+            block_component_processor::vote_reward::epoch_inflation_account_state::EpochInflationAccountState,
             genesis_utils::{
                 create_genesis_config_with_vote_accounts, GenesisConfigInfo, ValidatorVoteKeypairs,
             },
@@ -778,7 +779,19 @@ mod tests {
                 assert!(curr_bank
                     .get_epoch_rewards_from_cache(&curr_bank.parent_hash)
                     .is_some());
-                assert_eq!(post_cap, pre_cap);
+
+                // epoch inflation account state should always exist for the current bank as it
+                // crossed an epoch boundary.
+                assert!(EpochInflationAccountState::new_from_bank(&curr_bank).is_some());
+
+                // If this is the first epoch boundary crossing, then the previous bank did not
+                // have an epoch inflation state.  Account for that in the assertion.
+                if EpochInflationAccountState::new_from_bank(&previous_bank).is_none() {
+                    let rent = EpochInflationAccountState::rent_needed_for_account(&curr_bank);
+                    assert_eq!(post_cap, pre_cap + rent);
+                } else {
+                    assert_eq!(post_cap, pre_cap);
+                }
 
                 // Make a root the bank, which is the first bank in the epoch.
                 // This will clear the cache.

@@ -76,7 +76,7 @@ impl EpochInflationAccountState {
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
     ///
     /// Returns `None` if the `bank` does not contain the account.
-    pub(super) fn new_from_bank(bank: &Bank) -> Option<Self> {
+    pub(crate) fn new_from_bank(bank: &Bank) -> Option<Self> {
         bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR).map(|acct| {
             acct.deserialize_data()
                 .expect("should deserialize as we serialized the data in Self::set_state()")
