@@ -90,7 +90,8 @@ impl EpochInflationAccountState {
         let lamports = bank
             .rent_collector()
             .rent
-            .minimum_balance(account_size.try_into().unwrap());
+            .minimum_balance(account_size.try_into().unwrap())
+            .max(1);
         let account = AccountSharedData::new_data(lamports, &self, &system_program::ID).unwrap();
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
     }
@@ -107,7 +108,9 @@ impl EpochInflationAccountState {
             prev: None,
         };
         let account_size = bincode::serialized_size(&account).unwrap();
-        let lamports = Rent::default().minimum_balance(account_size.try_into().unwrap());
+        let lamports = Rent::default()
+            .minimum_balance(account_size.try_into().unwrap())
+            .max(1);
         let account = Account::new_data(lamports, &account, &system_program::ID).unwrap();
         genesis_config
             .accounts
