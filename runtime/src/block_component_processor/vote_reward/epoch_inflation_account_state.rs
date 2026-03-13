@@ -87,11 +87,7 @@ impl EpochInflationAccountState {
     pub(super) fn set_state(&self, bank: &Bank) {
         // TODO: use wincode instead.
         let account_size = bincode::serialized_size(&self).unwrap();
-        let lamports = bank
-            .rent_collector()
-            .rent
-            .minimum_balance(account_size.try_into().unwrap())
-            .max(1);
+        let lamports = bank.get_minimum_balance_for_rent_exemption(account_size as usize);
         let account = AccountSharedData::new_data(lamports, &self, &system_program::ID).unwrap();
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
     }
@@ -174,10 +170,7 @@ impl EpochInflationAccountState {
             prev: None,
         };
         let account_size = bincode::serialized_size(&state).unwrap();
-        bank.rent_collector()
-            .rent
-            .minimum_balance(account_size as usize)
-            .max(1)
+        bank.get_minimum_balance_for_rent_exemption(account_size as usize)
     }
 }
 
