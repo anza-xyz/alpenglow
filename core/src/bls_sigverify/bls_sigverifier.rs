@@ -24,7 +24,6 @@ use {
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure_us,
     solana_pubkey::Pubkey,
-    solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_streamer::{
         packet::PacketBatch,
@@ -50,7 +49,6 @@ pub(crate) fn spawn_service(
     channel_to_reward: Sender<AddVoteMessage>,
     channel_to_pool: Sender<Vec<ConsensusMessage>>,
     channel_to_metrics: ConsensusMetricsEventSender,
-    alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
     num_threads: usize,
@@ -61,7 +59,6 @@ pub(crate) fn spawn_service(
         channel_to_reward,
         channel_to_pool,
         channel_to_metrics,
-        alpenglow_last_voted,
         cluster_info,
         leader_schedule,
         num_threads,
@@ -89,7 +86,6 @@ struct SigVerifier {
     verified_certs: HashSet<CertificateType>,
     /// Tracks when the cache was last pruned.
     last_checked_root_slot: Slot,
-    alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
     /// Buffer to collect votes to verify.  Stored here to reduce reallocations.
@@ -105,7 +101,6 @@ impl SigVerifier {
         channel_to_reward: Sender<AddVoteMessage>,
         channel_to_pool: Sender<Vec<ConsensusMessage>>,
         channel_to_metrics: ConsensusMetricsEventSender,
-        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         cluster_info: Arc<ClusterInfo>,
         leader_schedule: Arc<LeaderScheduleCache>,
         num_threads: usize,
@@ -124,7 +119,6 @@ impl SigVerifier {
             verified_certs: HashSet::new(),
             channel_to_metrics,
             last_checked_root_slot: 0,
-            alpenglow_last_voted,
             cluster_info,
             leader_schedule,
             votes_buffer: Vec::new(),
@@ -212,10 +206,6 @@ impl SigVerifier {
         let (votes_buffer, vote_stats) = votes_result?;
         self.votes_buffer = votes_buffer;
         let cert_stats = certs_result?;
-
-        // Send to RPC service for last voted tracking
-        self.alpenglow_last_voted
-            .update_last_voted(&last_voted_slots);
 
         self.stats.vote_stats.merge(vote_stats);
         self.stats.cert_stats.merge(cert_stats);
@@ -359,7 +349,6 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::default());
         let keypair = Keypair::new();
         let contact_info = ContactInfo::new_localhost(&keypair.pubkey(), 0);
         let cluster_info = Arc::new(ClusterInfo::new(
@@ -376,7 +365,6 @@ mod tests {
                 reward_votes_sender,
                 message_sender,
                 consensus_metrics_sender,
-                alpenglow_last_voted,
                 cluster_info,
                 leader_schedule,
                 4,
@@ -1234,7 +1222,6 @@ mod tests {
             reward_votes_sender,
             message_sender,
             consensus_metrics_sender,
-            Arc::new(AlpenglowLastVoted::default()),
             cluster_info,
             leader_schedule,
             4,
