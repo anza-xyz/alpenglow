@@ -226,7 +226,9 @@ impl LocalCluster {
         socket_addr_space: SocketAddrSpace,
     ) -> Self {
         *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() = VoteStateTargetVersion::V4;
-        Self::init(config, socket_addr_space, AlpenglowMode::PreMigration)
+        let mut ret = Self::init(config, socket_addr_space, AlpenglowMode::PreMigration);
+        ret.genesis_config.rent = Rent::default();
+        ret
     }
 
     pub fn init(
@@ -357,7 +359,6 @@ impl LocalCluster {
             config.cluster_type,
             is_alpenglow,
         );
-        genesis_config.rent = Rent::default();
 
         // Remove the alpenglow feature and genesis certificate for PreMigration mode
         if alpenglow_mode == AlpenglowMode::PreMigration {
