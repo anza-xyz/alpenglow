@@ -192,6 +192,7 @@ impl ConsensusPool {
     /// - update any newly created events
     fn update_certificates(
         &mut self,
+        root_bank: &Bank,
         vote: &Vote,
         block_id: Option<Hash>,
         events: &mut Vec<VotorEvent>,
@@ -240,7 +241,7 @@ impl ConsensusPool {
                 }
             });
             let new_cert = Arc::new(cert_builder.build()?);
-            self.insert_certificate(cert_type, new_cert.clone(), events);
+            self.insert_certificate(root_bank, cert_type, new_cert.clone(), events);
             self.stats.incr_cert_type(&new_cert.cert_type, true);
             new_certificates_to_send.push(new_cert);
         }
@@ -285,6 +286,7 @@ impl ConsensusPool {
 
     fn insert_certificate(
         &mut self,
+        root_bank: &Bank,
         cert_type: CertificateType,
         cert: Arc<Certificate>,
         events: &mut Vec<VotorEvent>,
@@ -316,6 +318,7 @@ impl ConsensusPool {
                             Some(ValidatedBlockFinalizationCert::from_validated_slow(
                                 (**finalize_cert).clone(),
                                 (*cert).clone(),
+                                root_bank,
                             ));
                     }
                 }
@@ -329,6 +332,7 @@ impl ConsensusPool {
                             Some(ValidatedBlockFinalizationCert::from_validated_slow(
                                 (*cert).clone(),
                                 (*notarize_cert).clone(),
+                                root_bank,
                             ));
                     }
                 }
@@ -339,9 +343,11 @@ impl ConsensusPool {
                     .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 // Use <= for FastFinalize since it supersedes standard finalization at the same slot
                 if self.highest_finalized_slot().is_none_or(|s| s <= slot) {
-                    self.highest_finalized_slot_cert = Some(
-                        ValidatedBlockFinalizationCert::from_validated_fast((*cert).clone()),
-                    );
+                    self.highest_finalized_slot_cert =
+                        Some(ValidatedBlockFinalizationCert::from_validated_fast(
+                            (*cert).clone(),
+                            root_bank,
+                        ));
                 }
             }
             CertificateType::Genesis(slot, block_id) => {
@@ -375,9 +381,7 @@ impl ConsensusPool {
             ConsensusMessage::Vote(vote_message) => {
                 self.add_vote(root_bank, my_vote_pubkey, vote_message, events)?
             }
-            ConsensusMessage::Certificate(cert) => {
-                self.add_certificate(root_bank.slot(), cert, events)?
-            }
+            ConsensusMessage::Certificate(cert) => self.add_certificate(root_bank, cert, events)?,
         };
         // If we have a new highest finalized slot, return it
         let new_finalized_slot = if self.highest_finalized_slot() > current_highest_finalized_slot {
@@ -456,18 +460,18 @@ impl ConsensusPool {
         }
         self.stats.incr_ingested_vote_type(vote_type);
 
-        self.update_certificates(vote, block_id, events, total_stake)
+        self.update_certificates(root_bank, vote, block_id, events, total_stake)
     }
 
     fn add_certificate(
         &mut self,
-        root_slot: Slot,
+        root_bank: &Bank,
         cert: Certificate,
         events: &mut Vec<VotorEvent>,
     ) -> Result<Vec<Arc<Certificate>>, AddVoteError> {
         let cert_type = cert.cert_type;
         self.stats.incoming_certs = self.stats.incoming_certs.saturating_add(1);
-        if cert_type.slot() < root_slot {
+        if cert_type.slot() < root_bank.slot() {
             self.stats.out_of_range_certs = self.stats.out_of_range_certs.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
@@ -476,7 +480,7 @@ impl ConsensusPool {
             return Ok(vec![]);
         }
         let cert = Arc::new(cert);
-        self.insert_certificate(cert_type, cert.clone(), events);
+        self.insert_certificate(root_bank, cert_type, cert.clone(), events);
 
         self.stats.incr_cert_type(&cert_type, false);
 
@@ -700,6 +704,7 @@ mod tests {
     use {
         super::*,
         agave_votor_messages::consensus_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        bitvec::prelude::*,
         solana_bls_signatures::{
             keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey, Signature as BLSSignature,
             VerifiableSignature,
@@ -716,6 +721,7 @@ mod tests {
             },
         },
         solana_signer::Signer,
+        solana_signer_store::encode_base2,
         solana_streamer::socket::SocketAddrSpace,
         std::sync::{Arc, RwLock},
         test_case::test_case,
@@ -747,6 +753,12 @@ mod tests {
 
     fn create_bank(slot: Slot, parent: Arc<Bank>, pubkey: &Pubkey) -> Bank {
         Bank::new_from_parent_with_options(parent, pubkey, slot, NewBankOptions::default())
+    }
+
+    fn dummy_bitmap() -> Vec<u8> {
+        let mut bitvec = BitVec::<u8, Lsb0>::repeat(false, 1);
+        bitvec.set(0, true);
+        encode_base2(&bitvec).unwrap()
     }
 
     fn create_bank_forks(validator_keypairs: &[ValidatorVoteKeypairs]) -> Arc<RwLock<BankForks>> {
@@ -1113,7 +1125,7 @@ mod tests {
             let notarize_cert = Certificate {
                 cert_type: CertificateType::Notarize(vote.slot(), Hash::default()),
                 signature: BLSSignature::default(),
-                bitmap: Vec::new(),
+                bitmap: dummy_bitmap(),
             };
             pool.add_message(
                 &bank,
@@ -1210,7 +1222,7 @@ mod tests {
         let cert = Certificate {
             cert_type,
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
 
@@ -1220,7 +1232,7 @@ mod tests {
             let notarize_cert = Certificate {
                 cert_type: CertificateType::Notarize(5, Hash::default()),
                 signature: BLSSignature::default(),
-                bitmap: Vec::new(),
+                bitmap: dummy_bitmap(),
             };
             pool.add_message(
                 &bank,
@@ -1875,7 +1887,7 @@ mod tests {
         let cert_1 = Certificate {
             cert_type: CertificateType::Skip(1),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -1888,7 +1900,7 @@ mod tests {
         let cert_2 = Certificate {
             cert_type: CertificateType::FinalizeFast(2, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -1927,7 +1939,7 @@ mod tests {
         let cert = ConsensusMessage::Certificate(Certificate {
             cert_type,
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         });
         assert!(pool
             .add_message(&new_bank, &Pubkey::new_unique(), cert, &mut vec![])
@@ -1945,7 +1957,7 @@ mod tests {
         let cert_3 = Certificate {
             cert_type: CertificateType::NotarizeFallback(3, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
         assert!(pool
@@ -1959,7 +1971,7 @@ mod tests {
         let cert_4 = Certificate {
             cert_type: CertificateType::Finalize(4),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -1981,7 +1993,7 @@ mod tests {
         let cert_5 = Certificate {
             cert_type: CertificateType::Notarize(5, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -1996,7 +2008,7 @@ mod tests {
         let cert_5_finalize = Certificate {
             cert_type: CertificateType::Finalize(5),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2011,7 +2023,7 @@ mod tests {
         let cert_5 = Certificate {
             cert_type: CertificateType::FinalizeFast(5, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2033,7 +2045,7 @@ mod tests {
         let cert_6 = Certificate {
             cert_type: CertificateType::Notarize(6, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2055,7 +2067,7 @@ mod tests {
         let cert_6_finalize = Certificate {
             cert_type: CertificateType::Finalize(6),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2069,7 +2081,7 @@ mod tests {
         let cert_6_notarize_fallback = Certificate {
             cert_type: CertificateType::NotarizeFallback(6, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2092,7 +2104,7 @@ mod tests {
         let cert_7 = Certificate {
             cert_type: CertificateType::Skip(7),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2118,7 +2130,7 @@ mod tests {
         let cert_8_finalize = Certificate {
             cert_type: CertificateType::Finalize(8),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2131,7 +2143,7 @@ mod tests {
         let cert_8_notarize = Certificate {
             cert_type: CertificateType::Notarize(8, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(
@@ -2163,7 +2175,7 @@ mod tests {
             let cert = Certificate {
                 cert_type: CertificateType::Notarize(slot, hash),
                 signature: BLSSignature::default(),
-                bitmap: Vec::new(),
+                bitmap: dummy_bitmap(),
             };
             assert!(pool
                 .add_message(
@@ -2189,7 +2201,7 @@ mod tests {
             let cert = Certificate {
                 cert_type: CertificateType::FinalizeFast(slot, hash),
                 signature: BLSSignature::default(),
-                bitmap: Vec::new(),
+                bitmap: dummy_bitmap(),
             };
             assert!(pool
                 .add_message(
@@ -2215,7 +2227,7 @@ mod tests {
             let cert = Certificate {
                 cert_type: CertificateType::NotarizeFallback(slot, hash),
                 signature: BLSSignature::default(),
-                bitmap: Vec::new(),
+                bitmap: dummy_bitmap(),
             };
             assert!(pool
                 .add_message(
@@ -2229,7 +2241,7 @@ mod tests {
         let cert = Certificate {
             cert_type: CertificateType::FinalizeFast(11, hash),
             signature: BLSSignature::default(),
-            bitmap: Vec::new(),
+            bitmap: dummy_bitmap(),
         };
         assert!(pool
             .add_message(

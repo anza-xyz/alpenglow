@@ -1,12 +1,18 @@
 use {
-    crate::{bank::Bank, epoch_stakes::VersionedEpochStakes},
+    crate::{
+        bank::Bank, epoch_stakes::VersionedEpochStakes,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
+    },
     epoch_inflation_account_state::{EpochInflationAccountState, EpochInflationState},
     log::{error, info},
     solana_account::{AccountSharedData, ReadableAccount},
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
     solana_vote::vote_account::VoteAccount,
-    solana_vote_interface::state::{VoteStateV4, VoteStateVersions, MAX_EPOCH_CREDITS_HISTORY},
+    solana_vote_interface::state::{
+        LandedVote, Lockout, VoteStateV4, VoteStateVersions, MAX_EPOCH_CREDITS_HISTORY,
+    },
+    std::collections::VecDeque,
     thiserror::Error,
 };
 
@@ -40,7 +46,7 @@ pub enum PayVoteRewardError {
     },
 }
 
-/// Calculates and pays voting reward.
+/// Calculates voting rewards and updates vote state fields for rewarded validators.
 ///
 /// This is a NOP if [`reward_slot_and_validators`] is [`None`].
 ///
@@ -48,9 +54,13 @@ pub enum PayVoteRewardError {
 /// epoch than the current epoch and may have different validator sets and stakes, etc.
 /// This function must compute rewards using the stakes in the reward slot and pay them using the
 /// stakes in the current slot.
-pub(super) fn calculate_and_pay_voting_reward(
+///
+/// Additionally we also update vote-state `votes` and `root_slot` fields from the footer
+/// reward and finalization certificate
+pub(super) fn calculate_and_pay_voting_reward_and_update_vote_state(
     bank: &Bank,
     reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
+    final_cert: Option<&ValidatedBlockFinalizationCert>,
 ) -> Result<(), PayVoteRewardError> {
     let Some((reward_slot, validators_to_reward)) = reward_slot_and_validators else {
         return Ok(());
@@ -130,9 +140,14 @@ pub(super) fn calculate_and_pay_voting_reward(
                 );
                 continue;
             };
-            if let Some(account_data) =
-                pay_reward(current_epoch, current_slot_account, validator_reward)
-            {
+            if let Some(account_data) = pay_reward_update_vote_state(
+                current_epoch,
+                reward_slot,
+                current_slot_account,
+                validator_to_reward,
+                validator_reward,
+                final_cert,
+            ) {
                 paid_vote_accounts.push((validator_to_reward, account_data));
             }
         }
@@ -140,9 +155,14 @@ pub(super) fn calculate_and_pay_voting_reward(
     if let Some(pubkey) = current_slot_leader_vote_pubkey {
         match current_vote_accounts.get(&pubkey) {
             Some((_, leader_account)) => {
-                if let Some(account_data) =
-                    pay_reward(current_epoch, leader_account, total_leader_reward)
-                {
+                if let Some(account_data) = pay_reward_update_vote_state(
+                    current_epoch,
+                    reward_slot,
+                    leader_account,
+                    pubkey,
+                    total_leader_reward,
+                    final_cert,
+                ) {
                     paid_vote_accounts.push((pubkey, account_data));
                 }
             }
@@ -187,13 +207,16 @@ fn calculate_reward(
     (validator_reward_lamports, leader_reward_lamports)
 }
 
-/// Pays `reward` to `account` in `current_epoch`.
+/// Pays `reward` to `account` in `current_epoch` and updates vote state `votes` and `root_slot`
 ///
 /// TODO: this is using VoteStateV4 explicitly.  When we upstream, we will use VoteStateHandle API.
-fn pay_reward(
+fn pay_reward_update_vote_state(
     current_epoch: Epoch,
+    reward_slot: Slot,
     account: &VoteAccount,
+    validator_vote_pubkey: Pubkey,
     reward: u64,
+    final_cert: Option<&ValidatedBlockFinalizationCert>,
 ) -> Option<AccountSharedData> {
     let data = account.account().data();
     let Ok(vote_state_versions) = bincode::deserialize(data) else {
@@ -202,6 +225,12 @@ fn pay_reward(
     match vote_state_versions {
         VoteStateVersions::V4(mut vote_state) => {
             increment_credits(&mut vote_state, current_epoch, reward);
+            update_vote_state(
+                &mut vote_state,
+                reward_slot,
+                validator_vote_pubkey,
+                final_cert,
+            );
             let mut paid_account = AccountSharedData::new(
                 account.lamports(),
                 account.account().data().len(),
@@ -216,7 +245,7 @@ fn pay_reward(
     }
 }
 
-/// We store rewards as credits in the current vote state.
+/// Stores rewards as credits in the current vote state.
 ///
 /// TODO: this is using VoteStateV4 explicitly.  When we upstream, we will use VoteStateHandle API.
 fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
@@ -247,6 +276,26 @@ fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
         .unwrap()
         .1
         .saturating_add(credits);
+}
+
+/// Updates `root_slot` and `votes` in vote state using the rewards and finalization certificates from the footer
+fn update_vote_state(
+    vote_state: &mut VoteStateV4,
+    reward_slot: Slot,
+    validator_vote_pubkey: Pubkey,
+    final_cert: Option<&ValidatedBlockFinalizationCert>,
+) {
+    if let Some(final_cert) = final_cert {
+        if final_cert.was_signed_by(&validator_vote_pubkey) {
+            vote_state.root_slot = Some(final_cert.slot());
+        }
+    }
+
+    let latest_root_or_reward = vote_state.root_slot.unwrap_or(reward_slot).max(reward_slot);
+    vote_state.votes = VecDeque::from([LandedVote {
+        lockout: Lockout::new(latest_root_or_reward),
+        latency: 0,
+    }]);
 }
 
 #[derive(Debug, Error)]
@@ -286,17 +335,58 @@ mod tests {
             genesis_utils::{
                 create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
             },
+            validated_block_finalization::ValidatedBlockFinalizationCert,
         },
-        agave_votor_messages::reward_certificate::NUM_SLOTS_FOR_REWARD,
+        agave_votor_messages::{
+            consensus_message::{Certificate, CertificateType},
+            reward_certificate::NUM_SLOTS_FOR_REWARD,
+        },
+        bitvec::prelude::*,
         rand::seq::SliceRandom,
         solana_account::ReadableAccount,
+        solana_bls_signatures::Signature as BLSSignature,
         solana_epoch_schedule::EpochSchedule,
         solana_genesis_config::GenesisConfig,
+        solana_hash::Hash,
         solana_native_token::LAMPORTS_PER_SOL,
         solana_rent::Rent,
         solana_signer::Signer,
+        solana_signer_store::encode_base2,
         std::sync::Arc,
     };
+
+    fn get_vote_state_v4(bank: &Bank, vote_pubkey: &Pubkey) -> VoteStateV4 {
+        let vote_accounts = bank.vote_accounts();
+        let (_, vote_account) = vote_accounts.get(vote_pubkey).unwrap();
+        let vote_state_versions: VoteStateVersions =
+            bincode::deserialize(vote_account.account().data()).unwrap();
+        let VoteStateVersions::V4(vote_state) = vote_state_versions else {
+            panic!("unexpected vote state version");
+        };
+        *vote_state
+    }
+
+    fn build_fast_finalization_cert(
+        bank: &Bank,
+        signing_ranks: &[usize],
+    ) -> ValidatedBlockFinalizationCert {
+        let slot = bank.slot();
+        let block_id = Hash::new_unique();
+        let cert_type = CertificateType::FinalizeFast(slot, block_id);
+        let max_rank = signing_ranks.iter().copied().max().unwrap_or(0);
+        let mut bitvec = BitVec::<u8, Lsb0>::repeat(false, max_rank.saturating_add(1));
+        for &rank in signing_ranks {
+            bitvec.set(rank, true);
+        }
+        let bitmap = encode_base2(&bitvec).unwrap();
+
+        let cert = Certificate {
+            cert_type,
+            signature: BLSSignature::default(),
+            bitmap,
+        };
+        ValidatedBlockFinalizationCert::from_validated_fast(cert, bank)
+    }
 
     #[test]
     fn calculate_voting_reward_does_not_panic() {
@@ -333,7 +423,9 @@ mod tests {
         let account = VoteAccount::new_random_alpenglow();
         let epoch = 1234;
         let reward = 3453423;
-        let account_shared_data = pay_reward(epoch, &account, reward).unwrap();
+        let account_shared_data =
+            pay_reward_update_vote_state(epoch, 0, &account, Pubkey::default(), reward, None)
+                .unwrap();
         let vote_state_versions: VoteStateVersions =
             bincode::deserialize(&account_shared_data.data_clone()).unwrap();
         let VoteStateVersions::V4(vote_state) = vote_state_versions else {
@@ -398,9 +490,10 @@ mod tests {
         let bank = Bank::new_from_parent(prev_bank.clone(), &leader_node_pubkey, current_slot);
         let reward_slot = current_slot - NUM_SLOTS_FOR_REWARD;
 
-        calculate_and_pay_voting_reward(
+        calculate_and_pay_voting_reward_and_update_vote_state(
             &bank,
             Some((reward_slot, validator_pubkeys_to_reward.clone())),
+            None,
         )
         .unwrap();
 
@@ -432,5 +525,120 @@ mod tests {
             * validator_pubkeys_to_reward.len() as u64
             + rewards.last().unwrap();
         assert_eq!(expected_leader_reward, rewards[0]);
+    }
+
+    #[test]
+    fn calculate_and_pay_sets_root_slot_for_signer_in_final_cert() {
+        let validator_keypairs = (0..4)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let per_validator_stake = LAMPORTS_PER_SOL * 100;
+        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            vec![per_validator_stake; validator_keypairs.len()],
+        )
+        .genesis_config;
+        genesis_config.epoch_schedule = EpochSchedule::without_warmup();
+        genesis_config.rent = Rent::default();
+
+        let leader_node_pubkey = validator_keypairs[0].node_keypair.pubkey();
+        let target_vote_pubkey = validator_keypairs[1].vote_keypair.pubkey();
+
+        let prev_bank = Arc::new(Bank::new_for_tests(&genesis_config));
+        let current_slot = prev_bank
+            .epoch_schedule
+            .get_first_slot_in_epoch(prev_bank.epoch() + 1)
+            + NUM_SLOTS_FOR_REWARD;
+        let bank = Bank::new_from_parent(prev_bank.clone(), &leader_node_pubkey, current_slot);
+        let reward_slot = current_slot - NUM_SLOTS_FOR_REWARD;
+
+        let cert_rank = {
+            let rank_map = bank
+                .epoch_stakes_from_slot(bank.slot())
+                .unwrap()
+                .bls_pubkey_to_rank_map();
+            (0..rank_map.len())
+                .find_map(|rank| {
+                    rank_map
+                        .get_pubkey_stake_entry(rank)
+                        .and_then(|entry| (entry.pubkey == target_vote_pubkey).then_some(rank))
+                })
+                .unwrap()
+        };
+        let final_cert = build_fast_finalization_cert(&bank, &[cert_rank]);
+
+        calculate_and_pay_voting_reward_and_update_vote_state(
+            &bank,
+            Some((reward_slot, vec![target_vote_pubkey])),
+            Some(&final_cert),
+        )
+        .unwrap();
+
+        let vote_state = get_vote_state_v4(&bank, &target_vote_pubkey);
+        assert_eq!(vote_state.root_slot, Some(final_cert.slot()));
+        assert_eq!(vote_state.votes.len(), 1);
+        assert_eq!(
+            vote_state.votes.front().unwrap().lockout.slot(),
+            final_cert.slot().max(reward_slot)
+        );
+    }
+
+    #[test]
+    fn calculate_and_pay_uses_reward_slot_vote_when_signer_absent_from_final_cert() {
+        let validator_keypairs = (0..4)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let per_validator_stake = LAMPORTS_PER_SOL * 100;
+        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            vec![per_validator_stake; validator_keypairs.len()],
+        )
+        .genesis_config;
+        genesis_config.epoch_schedule = EpochSchedule::without_warmup();
+        genesis_config.rent = Rent::default();
+
+        let leader_node_pubkey = validator_keypairs[0].node_keypair.pubkey();
+        let target_vote_pubkey = validator_keypairs[1].vote_keypair.pubkey();
+        let non_target_vote_pubkey = validator_keypairs[2].vote_keypair.pubkey();
+
+        let prev_bank = Arc::new(Bank::new_for_tests(&genesis_config));
+        let current_slot = prev_bank
+            .epoch_schedule
+            .get_first_slot_in_epoch(prev_bank.epoch() + 1)
+            + NUM_SLOTS_FOR_REWARD;
+        let bank = Bank::new_from_parent(prev_bank.clone(), &leader_node_pubkey, current_slot);
+        let reward_slot = current_slot - NUM_SLOTS_FOR_REWARD;
+
+        let cert_rank = {
+            let rank_map = bank
+                .epoch_stakes_from_slot(bank.slot())
+                .unwrap()
+                .bls_pubkey_to_rank_map();
+            (0..rank_map.len())
+                .find_map(|rank| {
+                    rank_map
+                        .get_pubkey_stake_entry(rank)
+                        .and_then(|entry| (entry.pubkey == non_target_vote_pubkey).then_some(rank))
+                })
+                .unwrap()
+        };
+        let final_cert = build_fast_finalization_cert(&bank, &[cert_rank]);
+
+        calculate_and_pay_voting_reward_and_update_vote_state(
+            &bank,
+            Some((reward_slot, vec![target_vote_pubkey])),
+            Some(&final_cert),
+        )
+        .unwrap();
+
+        let vote_state = get_vote_state_v4(&bank, &target_vote_pubkey);
+        assert_eq!(vote_state.root_slot, None);
+        assert_eq!(vote_state.votes.len(), 1);
+        assert_eq!(
+            vote_state.votes.front().unwrap().lockout.slot(),
+            reward_slot
+        );
     }
 }
