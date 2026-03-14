@@ -22,7 +22,7 @@ use {
     vote_reward::calculate_and_pay_voting_reward,
 };
 
-pub(crate) mod vote_reward;
+pub mod vote_reward;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BlockComponentProcessorError {
