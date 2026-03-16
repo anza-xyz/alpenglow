@@ -545,6 +545,7 @@ mod tests {
             consensus_message::{CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
             vote::Vote,
         },
+        bitvec::prelude::*,
         crossbeam_channel::Sender,
         solana_bls_signatures::{
             keypair::Keypair as BLSKeypair, signature::Signature as BLSSignature,
@@ -559,10 +560,17 @@ mod tests {
             },
         },
         solana_signer::Signer,
+        solana_signer_store::encode_base2,
         solana_streamer::socket::SocketAddrSpace,
         std::sync::Arc,
         test_case::test_case,
     };
+
+    fn dummy_bitmap() -> Vec<u8> {
+        let mut bitvec = BitVec::<u8, Lsb0>::repeat(false, 1);
+        bitvec.set(0, true);
+        encode_base2(&bitvec).unwrap()
+    }
 
     struct ConsensusPoolServiceTestComponents {
         consensus_pool_service: ConsensusPoolService,
@@ -737,7 +745,7 @@ mod tests {
         let skip_certificate = Certificate {
             cert_type: CertificateType::Skip(target_slot),
             signature: BLSSignature::default(),
-            bitmap: vec![],
+            bitmap: dummy_bitmap(),
         };
         test_send_and_receive(
             &setup_result.consensus_message_sender,
@@ -776,7 +784,7 @@ mod tests {
                 let skip_certificate = Certificate {
                     cert_type: CertificateType::Skip(slot),
                     signature: BLSSignature::default(),
-                    bitmap: vec![],
+                    bitmap: dummy_bitmap(),
                 };
                 ConsensusMessage::Certificate(skip_certificate)
             })
@@ -823,7 +831,7 @@ mod tests {
             let finalize_certificate = Certificate {
                 cert_type: CertificateType::FinalizeFast(2, Hash::new_unique()),
                 signature: BLSSignature::default(),
-                bitmap: vec![],
+                bitmap: dummy_bitmap(),
             };
             setup_result
                 .consensus_message_sender
@@ -939,7 +947,7 @@ mod tests {
         let finalize_cert = Certificate {
             cert_type: CertificateType::FinalizeFast(10, Hash::new_unique()),
             signature: BLSSignature::default(),
-            bitmap: vec![],
+            bitmap: dummy_bitmap(),
         };
         let _ = consensus_pool.add_message(
             &ctx.sharable_banks.root(),

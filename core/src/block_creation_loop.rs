@@ -739,10 +739,12 @@ fn record_and_complete_block(
         &ctx.highest_finalized,
     );
 
-    BlockComponentProcessor::update_bank_with_footer(
+    BlockComponentProcessor::update_bank_with_footer_fields(
         &working_bank.bank,
-        &footer,
+        footer.block_producer_time_nanos as i64,
+        Hash::default(), // Banks we produce do not need the bank hash mismatch check
         reward_slot_and_validators,
+        ctx.highest_finalized.read().unwrap().as_ref(),
     );
 
     drop(bank);
