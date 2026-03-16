@@ -207,7 +207,8 @@ fn calculate_reward(
     (validator_reward_lamports, leader_reward_lamports)
 }
 
-/// Pays `reward` to `account` in `current_epoch` and updates vote state `votes` and `root_slot`
+/// Deserializes `VoteState` from `account`; pays `reward` in `current_epoch` to the `epoch_credits` field;
+/// and updates the `votes` and `root_slot` fields in the vote state deserialized from the `account`.
 ///
 /// TODO: this is using VoteStateV4 explicitly.  When we upstream, we will use VoteStateHandle API.
 fn pay_reward_update_vote_state(
@@ -279,6 +280,20 @@ fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
 }
 
 /// Updates `root_slot` and `votes` in vote state using the rewards and finalization certificates from the footer
+///
+/// Downstream tooling expects these fields to be be set:
+/// - `root_slot`, a validator's latest finalized & replayed slot
+/// - `votes`, a validator's latest vote
+///
+/// `votes` is consumed for health monitoring, we require it to be within `DELINQUENT_VALIDATOR_SLOT_DISTANCE`
+/// of the tip of the chain to be considered healthy.
+///
+/// `root_slot` is similarly used by various tooling (e.g. stake delegation) to determine whether the validator
+/// is healthy to interact with  and also is required to be within `DELINQUENT_VALIDATOR_SLOT_DISTANCE` of the tip.
+///
+/// Until we overhaul vote state we continue populating these two fields similar to TowerBFT:
+/// - `root_slot` is populated from the footer finalization certificate
+/// - `votes` is populated from the footer rewards aggregate
 fn update_vote_state(
     vote_state: &mut VoteStateV4,
     reward_slot: Slot,

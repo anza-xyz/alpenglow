@@ -228,6 +228,7 @@ impl ValidatedBlockFinalizationCert {
             notarize_cert.cert_type.slot(),
             finalize_cert.cert_type.slot()
         );
+
         let signers = Self::extract_signers(bank, &finalize_cert)
             .expect("Certificate should have been validated");
         Self {
@@ -249,6 +250,7 @@ impl ValidatedBlockFinalizationCert {
     /// Using an unvalidated certificate will compromise the type's safety guarantees.
     pub fn from_validated_fast(cert: Certificate, bank: &Bank) -> Self {
         debug_assert!(cert.cert_type.is_fast_finalization());
+
         let signers =
             Self::extract_signers(bank, &cert).expect("Certificate should have been validated");
         Self {
