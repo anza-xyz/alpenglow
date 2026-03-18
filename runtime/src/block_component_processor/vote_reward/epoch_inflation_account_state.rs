@@ -75,12 +75,11 @@ pub struct EpochInflationAccountState {
 impl EpochInflationAccountState {
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
     ///
-    /// Returns `None` if the `bank` does not contain the account.
+    /// Returns `None` if the `bank` does not contain the account or the account state is not of
+    /// the expected size.
     pub(crate) fn new_from_bank(bank: &Bank) -> Option<Self> {
-        bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR).map(|acct| {
-            acct.deserialize_data()
-                .expect("should deserialize as we serialized the data in Self::set_state()")
-        })
+        bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR)
+            .and_then(|acct| acct.deserialize_data().ok())
     }
 
     /// Serializes and updates [`Self`] into the accounts in the [`Bank`].
@@ -176,7 +175,16 @@ impl EpochInflationAccountState {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, rand::Rng, solana_genesis_config::GenesisConfig, std::sync::Arc};
+    use {
+        super::*,
+        crate::{
+            bank_forks::BankForks,
+            genesis_utils::{create_genesis_config, GenesisConfigInfo},
+        },
+        rand::Rng,
+        solana_genesis_config::GenesisConfig,
+        std::sync::Arc,
+    };
 
     fn get_rand_state() -> EpochInflationAccountState {
         let mut rng = rand::thread_rng();
@@ -238,5 +246,28 @@ mod tests {
             EpochInflationAccountState::new_from_bank(&bank_epoch_2).unwrap();
         assert_eq!(current, expected_current);
         assert_eq!(prev.unwrap(), expected_prev);
+    }
+
+    #[test]
+    fn handles_prefunded_account() {
+        let GenesisConfigInfo {
+            genesis_config,
+            mint_keypair,
+            ..
+        } = create_genesis_config(10_000);
+        let bank_forks = BankForks::new_rw_arc(Bank::new_for_tests(&genesis_config));
+        let root_bank = bank_forks.read().unwrap().root_bank();
+
+        let prefund_lamports = 100;
+        root_bank
+            .transfer(prefund_lamports, &mint_keypair, &VOTE_REWARD_ACCOUNT_ADDR)
+            .unwrap();
+
+        assert!(root_bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR).is_some());
+        assert_eq!(
+            root_bank.get_balance(&VOTE_REWARD_ACCOUNT_ADDR),
+            prefund_lamports,
+        );
+        assert_eq!(EpochInflationAccountState::new_from_bank(&root_bank), None);
     }
 }
