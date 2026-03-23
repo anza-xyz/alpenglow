@@ -44,7 +44,7 @@ use {
         shred::{
             self,
             merkle_tree::{self, SIZE_OF_MERKLE_PROOF_ENTRY},
-            Nonce, ShredFetchStats, DATA_SHREDS_PER_FEC_BLOCK, MAX_FEC_SETS_PER_SLOT,
+            Nonce, ShredFetchStats, ShredType, DATA_SHREDS_PER_FEC_BLOCK, MAX_FEC_SETS_PER_SLOT,
             SIZE_OF_NONCE,
         },
     },
@@ -185,6 +185,7 @@ impl RequestResponse for ShredRepairType {
                 ..
             } => {
                 shred_slot == *slot
+                    && matches!(shred::layout::get_shred_type(shred), Ok(ShredType::Data))
                     && shred::layout::get_index(shred) == Some(*index)
                     && get_merkle_root(shred) == Some(*fec_set_merkle_root)
             }
