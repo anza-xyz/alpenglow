@@ -69,6 +69,17 @@ cargo_audit_ignores=(
   # Severity:  6.8 (medium)
   # Solution:  Upgrade to >=0.3.47
   --ignore RUSTSEC-2026-0009
+  
+  # Crate:     rustls-webpki
+  # Version:   0.101.7
+  # Title:     CRLs not considered authorative by Distribution Point due to faulty matching logic
+  # Date:      2026-03-20
+  # ID:        RUSTSEC-2026-0049
+  # URL:       https://rustsec.org/advisories/RUSTSEC-2026-0049
+  # Solution:  Upgrade to >=0.103.10
+  # Dependency tree:
+  # rustls-webpki 0.101.7
+  --ignore RUSTSEC-2026-0049
 )
 scripts/cargo-for-all-lock-files.sh audit "${cargo_audit_ignores[@]}" | $dep_tree_filter
 # we want the `cargo audit` exit code, not `$dep_tree_filter`'s
