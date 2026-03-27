@@ -243,12 +243,9 @@ pub(super) struct EpochRewardCalculateParamInfo<'a> {
 /// side effects.
 #[derive(Debug)]
 pub(super) struct PartitionedRewardsCalculation {
-    pub(super) vote_account_rewards: VoteRewardsAccounts,
-    pub(super) stake_rewards: StakeRewardCalculation,
-    pub(super) validator_rate: f64,
-    pub(super) foundation_rate: f64,
-    pub(super) prev_epoch_duration_in_years: f64,
-    pub(super) capitalization: u64,
+    vote_account_rewards: VoteRewardsAccounts,
+    stake_rewards: StakeRewardCalculation,
+    capitalization: u64,
     point_value: PointValue,
 }
 

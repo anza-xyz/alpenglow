@@ -1,5 +1,5 @@
 use {
-    crate::bank::{Bank, EpochInflationRewards},
+    crate::bank::Bank,
     solana_account::{Account, AccountSharedData},
     solana_clock::Epoch,
     solana_genesis_config::GenesisConfig,
@@ -39,17 +39,12 @@ impl EpochInflationState {
         prev_epoch_capitalization: u64,
         additional_validator_rewards: u64,
     ) -> Self {
-        let EpochInflationRewards {
-            validator_rewards_lamports,
-            epoch_duration_in_years: _,
-            validator_rate: _,
-            foundation_rate: _,
-        } = bank.calculate_epoch_inflation_rewards(
+        let max_possible_validator_reward = bank.calculate_epoch_inflation_rewards(
             prev_epoch_capitalization + additional_validator_rewards,
             prev_epoch,
         );
         EpochInflationState {
-            max_possible_validator_reward: validator_rewards_lamports,
+            max_possible_validator_reward,
             slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
             epoch: bank.epoch(),
         }

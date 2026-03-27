@@ -820,10 +820,8 @@ where
         - EpochInflationAccountState::rent_needed_for_account(&bank2);
 
     // this assumes that no new builtins or precompiles were activated in bank1 or bank2
-    let EpochInflationRewards {
-        validator_rewards_lamports,
-        ..
-    } = bank2.calculate_epoch_inflation_rewards(bank0.capitalization(), bank0.epoch());
+    let validator_rewards_lamports =
+        bank2.calculate_epoch_inflation_rewards(bank0.capitalization(), bank0.epoch());
 
     // verify the stake and vote accounts are the right size
     assert!(
