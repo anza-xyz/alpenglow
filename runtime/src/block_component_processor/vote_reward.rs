@@ -346,7 +346,6 @@ mod tests {
     use {
         super::*,
         crate::{
-            bank::EpochInflationRewards,
             genesis_utils::{
                 create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
             },
@@ -410,10 +409,8 @@ mod tests {
         let circulating_supply = 566_000_000 * LAMPORTS_PER_SOL;
 
         let bank = Bank::new_for_tests(&GenesisConfig::default());
-        let EpochInflationRewards {
-            validator_rewards_lamports,
-            ..
-        } = bank.calculate_epoch_inflation_rewards(circulating_supply, 1);
+        let validator_rewards_lamports =
+            bank.calculate_epoch_inflation_rewards(circulating_supply, 1);
 
         let epoch_state = EpochInflationState {
             slots_per_epoch: bank.epoch_schedule.slots_per_epoch,
@@ -455,13 +452,8 @@ mod tests {
         total_stake: u64,
         stake_voted: u64,
     ) -> u64 {
-        let EpochInflationRewards {
-            validator_rewards_lamports: epoch_inflation,
-            epoch_duration_in_years: _,
-            validator_rate: _,
-            foundation_rate: _,
-        } = bank.calculate_epoch_inflation_rewards(prev_bank.capitalization(), prev_bank.epoch());
-
+        let epoch_inflation =
+            bank.calculate_epoch_inflation_rewards(prev_bank.capitalization(), prev_bank.epoch());
         let numerator = epoch_inflation as u128 * stake_voted as u128;
         let denominator = bank.epoch_schedule.slots_per_epoch as u128 * total_stake as u128;
         let reward: u64 = (numerator / denominator).try_into().unwrap();
