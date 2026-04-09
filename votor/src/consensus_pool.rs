@@ -51,9 +51,6 @@ pub enum AddVoteError {
     #[error("Unrooted slot")]
     UnrootedSlot,
 
-    #[error("Slot in the future")]
-    SlotInFuture,
-
     #[error("Certificate error: {0}")]
     Certificate(#[from] CertificateBuildError),
 
