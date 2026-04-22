@@ -69,7 +69,7 @@ cargo_audit_ignores=(
   # Severity:  6.8 (medium)
   # Solution:  Upgrade to >=0.3.47
   --ignore RUSTSEC-2026-0009
-  
+
   # Crate:     rustls-webpki
   # Version:   0.101.7
   # Title:     CRLs not considered authorative by Distribution Point due to faulty matching logic
@@ -80,6 +80,42 @@ cargo_audit_ignores=(
   # Dependency tree:
   # rustls-webpki 0.101.7
   --ignore RUSTSEC-2026-0049
+
+  # Crate:     rustls-webpki
+  # Version:   0.101.7
+  # Title:     Name constraints for URI names were incorrectly accepted
+  # Date:      2026-04-14
+  # ID:        RUSTSEC-2026-0098
+  # URL:       https://rustsec.org/advisories/RUSTSEC-2026-0098
+  # Solution:  Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6
+  # Dependency tree:
+  # rustls-webpki 0.101.7
+  # rustls-webpki 0.103.10
+  --ignore RUSTSEC-2026-0098
+
+  # Crate:     rustls-webpki
+  # Version:   0.101.7
+  # Title:     Name constraints were accepted for certificates asserting a wildcard name
+  # Date:      2026-04-14
+  # ID:        RUSTSEC-2026-0099
+  # URL:       https://rustsec.org/advisories/RUSTSEC-2026-0099
+  # Solution:  Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6
+  # Dependency tree:
+  # rustls-webpki 0.101.7
+  # rustls-webpki 0.103.10
+  --ignore RUSTSEC-2026-0099
+
+  # Crate:     rustls-webpki
+  # Version:   0.101.7
+  # Title:     Reachable panic in certificate revocation list parsing
+  # Date:      2026-04-22
+  # ID:        RUSTSEC-2026-0104
+  # URL:       https://rustsec.org/advisories/RUSTSEC-2026-0104
+  # Solution:  Upgrade to >=0.103.13, <0.104.0-alpha.1 OR >=0.104.0-alpha.7
+  # Dependency tree:
+  # rustls-webpki 0.101.7
+  # rustls-webpki 0.103.10
+  --ignore RUSTSEC-2026-0104
 )
 scripts/cargo-for-all-lock-files.sh audit "${cargo_audit_ignores[@]}" | $dep_tree_filter
 # we want the `cargo audit` exit code, not `$dep_tree_filter`'s
