@@ -332,6 +332,14 @@ fn start_loop(config: BlockCreationLoopConfig) {
              flh={fast_leader_handover}"
         );
 
+        if (start_slot..=end_slot).any(|s| ctx.blockstore.has_existing_shreds_for_slot(s)) {
+            warn!(
+                "{my_pubkey}: Already produced shreds in window \
+                 {start_slot}-{end_slot}, skipping"
+            );
+            continue;
+        }
+
         if let Err(e) = produce_window(
             fast_leader_handover,
             start_slot,
