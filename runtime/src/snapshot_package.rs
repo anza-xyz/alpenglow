@@ -1,5 +1,3 @@
-#[cfg(feature = "dev-context-only-utils")]
-use solana_hash::Hash;
 use {
     crate::{
         bank::{Bank, BankFieldsToSerialize, BankHashStats, BankSlotDelta},
@@ -7,6 +5,7 @@ use {
     },
     solana_accounts_db::accounts_db::AccountStorageEntry,
     solana_clock::Slot,
+    solana_hash::Hash,
     std::{
         sync::{atomic::Ordering, Arc},
         time::Instant,
@@ -27,6 +26,7 @@ pub struct SnapshotPackage {
     pub bank_fields_to_serialize: BankFieldsToSerialize,
     pub bank_hash_stats: BankHashStats,
     pub write_version: u64,
+    pub block_id: Option<Hash>,
 
     /// The instant this snapshot package was sent to the queue.
     /// Used to track how long snapshot packages wait before handling.
@@ -64,6 +64,7 @@ impl SnapshotPackage {
                 .accounts_db
                 .write_version
                 .load(Ordering::Acquire),
+            block_id: bank.block_id(),
             enqueued: Instant::now(),
         }
     }
@@ -84,6 +85,7 @@ impl SnapshotPackage {
             bank_fields_to_serialize: BankFieldsToSerialize::default_for_tests(),
             bank_hash_stats: BankHashStats::default(),
             write_version: u64::default(),
+            block_id: None,
             enqueued: Instant::now(),
         }
     }
