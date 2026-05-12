@@ -107,16 +107,9 @@ impl StandardBroadcastRun {
             })
         };
 
-        let parent_block_id = bank.parent_block_id().unwrap_or_else(|| {
-            // Once SIMD-0333 is active, we can just hard unwrap here.
-            error!(
-                "Parent block id missing for slot {} parent {}",
-                bank.slot(),
-                bank.parent_slot()
-            );
-            process_stats.err_unknown_parent_block_id += 1;
-            Hash::default()
-        });
+        let parent_block_id = bank
+            .parent_block_id()
+            .expect("Parent block ID must be present in snapshots after SIMD-0333");
 
         self.slot = bank.slot();
         self.parent = bank.parent_slot();

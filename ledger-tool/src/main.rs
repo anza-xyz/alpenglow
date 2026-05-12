@@ -71,6 +71,7 @@ use {
         },
     },
     solana_runtime_transaction::runtime_transaction::RuntimeTransaction,
+    solana_sha256_hasher::hashv,
     solana_shred_version::compute_shred_version,
     solana_stake_interface::{self as stake, state::StakeStateV2},
     solana_stake_program::stake_state,
@@ -2220,6 +2221,14 @@ fn main() {
                             debug!("Feature gate deactivated: {address}");
                         }
 
+                        // SIMD-0333: Set block_id for artificial bank
+                        // block_id = hash(parent_block_id, bank_hash)
+                        child_bank.freeze();
+                        let parent_block_id = bank.block_id().unwrap_or_default();
+                        let bank_hash = child_bank.hash();
+                        let block_id = hashv(&[parent_block_id.as_ref(), bank_hash.as_ref()]);
+                        child_bank.set_block_id(Some(block_id));
+
                         bank = Arc::new(child_bank);
                     }
 
@@ -2908,6 +2917,14 @@ fn main() {
                             tracer,
                         );
                         warped_bank.freeze();
+
+                        // SIMD-0333: Set block_id for artificial bank
+                        // block_id = hash(parent_block_id, bank_hash)
+                        let parent_block_id = base_bank.block_id().unwrap_or_default();
+                        let bank_hash = warped_bank.hash();
+                        let block_id = hashv(&[parent_block_id.as_ref(), bank_hash.as_ref()]);
+                        warped_bank.set_block_id(Some(block_id));
+
                         let mut csv_writer = if arg_matches.is_present("csv_filename") {
                             let csv_filename =
                                 value_t_or_exit!(arg_matches, "csv_filename", String);
