@@ -1,118 +1,54 @@
-<p align="center">
-  <a href="https://anza.xyz">
-    <img alt="Anza" src="https://i.postimg.cc/VkKTnMM9/agave-logo-talc-1.png" width="250" />
-  </a>
-</p>
+<!--
+DRAFT teaser README for anza-xyz/alpenglow (PR #1, pre-launch).
+Scope-expansion framing only: no pot, dates, or competition mechanics until the
+announcement. Swap to the launch README (ALPENGLOW_PORTAL_README_LAUNCH.md) when
+submissions open.
+-->
 
-[![Solana crate](https://img.shields.io/crates/v/solana-core.svg)](https://crates.io/crates/solana-core)
-[![Solana documentation](https://docs.rs/solana-core/badge.svg)](https://docs.rs/solana-core)
-[![Build status](https://badge.buildkite.com/8cc350de251d61483db98bdfc895b9ea0ac8ffa4a32ee850ed.svg?branch=master)](https://buildkite.com/solana-labs/solana/builds?branch=master)
-[![codecov](https://codecov.io/gh/solana-labs/solana/branch/master/graph/badge.svg)](https://codecov.io/gh/solana-labs/solana)
+# Alpenglow, coming into scope
 
-# Building
+Alpenglow is Solana's new consensus protocol. We're soon expanding the Agave bug
+bounty to cover it, and this repository is where it will run. Break consensus,
+get paid.
 
-## **1. Install rustc, cargo and rustfmt.**
+**Full scope, rules, and rewards are coming soon.** Submissions are not open yet.
 
-```bash
-$ curl https://sh.rustup.rs -sSf | sh
-$ source $HOME/.cargo/env
-$ rustup component add rustfmt
-```
+## Start here
 
-When building the master branch, please make sure you are using the latest stable rust version by running:
+The Alpenglow consensus code under review lives in
+[`anza-xyz/agave`](https://github.com/anza-xyz/agave). Begin with:
 
-```bash
-$ rustup update
-```
+- [`votor`](https://github.com/anza-xyz/agave/tree/master/votor): the voting engine
+- [`votor-messages`](https://github.com/anza-xyz/agave/tree/master/votor-messages): vote and certificate types
+- [`bls-sigverify`](https://github.com/anza-xyz/agave/tree/master/bls-sigverify): BLS signature verification
+- [`bls-cert-verify`](https://github.com/anza-xyz/agave/tree/master/bls-cert-verify): certificate verification and stake-threshold checks
 
-When building a specific release branch, you should check the rust version in `ci/rust-version.sh` and if necessary, install that version by running:
-```bash
-$ rustup install VERSION
-```
-Note that if this is not the latest rust version on your machine, cargo commands may require an [override](https://rust-lang.github.io/rustup/overrides.html) in order to use the correct version.
+Background: [SIMD-0326](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0326-alpenglow.md).
 
-On Linux systems you may need to install libssl-dev, pkg-config, zlib1g-dev, protobuf etc.
+You will read and reproduce against agave, and submit reports here once the
+program opens.
 
-On Ubuntu:
-```bash
-$ sudo apt-get update
-$ sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang cmake make libprotobuf-dev protobuf-compiler libclang-dev
-```
+## What we've already found
 
-On Fedora:
-```bash
-$ sudo dnf install openssl-devel systemd-devel pkg-config zlib-devel llvm clang cmake make protobuf-devel protobuf-compiler perl-core libclang-dev
-```
+Alpenglow has been under active review throughout its development. The consensus
+issues we've found and fixed are public on agave, and they're the best sense of
+the target: the kind of safety, liveness, and certificate-handling bugs that
+matter here.
 
-## **2. Download the source code.**
+Browse them all:
+[Alpenglow consensus issues on agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Ablocking-ag+label%3Aconsensus-team)
 
-```bash
-$ git clone https://github.com/anza-xyz/agave.git
-$ cd agave
-```
+A few examples:
 
-## **3. Build.**
+- [Standstill recovery emits ParentReady for the wrong slot, so the missed window never notarizes](https://github.com/anza-xyz/agave/issues/13699)
+- [Conflicting reward-certificate votes decided on vote count instead of stake](https://github.com/anza-xyz/agave/issues/13235)
+- [Startup replay freezes Alpenglow blocks without checking the footer bank hash](https://github.com/anza-xyz/agave/issues/13058)
+- [Panic in the block ID repair path](https://github.com/anza-xyz/agave/issues/12668)
+- [Malleable proof for FEC set size in double-Merkle repair](https://github.com/anza-xyz/agave/issues/12496)
 
-```bash
-$ ./cargo build
-```
+These are already fixed, so they won't be eligible once the program opens. Aim
+at what's still live on agave.
 
-> [!NOTE]
-> Note that this builds a debug version that is **not suitable for running a testnet or mainnet validator**. Please read [`docs/src/cli/install.md`](docs/src/cli/install.md#build-from-source) for instructions to build a release version for test and production uses.
+## Get notified
 
-# Testing
-
-**Run the test suite:**
-
-```bash
-$ ./cargo test
-```
-
-### Starting a local testnet
-
-Start your own testnet locally, instructions are in the [online docs](https://docs.anza.xyz/clusters/benchmark).
-
-### Accessing the remote development cluster
-
-* `devnet` - stable public cluster for development accessible via
-devnet.solana.com. Runs 24/7. Learn more about the [public clusters](https://docs.anza.xyz/clusters)
-
-# Benchmarking
-
-First, install the nightly build of rustc. `cargo bench` requires the use of the
-unstable features only available in the nightly build.
-
-```bash
-$ rustup install nightly
-```
-
-Run the benchmarks:
-
-```bash
-$ cargo +nightly bench
-```
-
-# Release Process
-
-The release process for this project is described [here](RELEASE.md).
-
-# Code coverage
-
-To generate code coverage statistics:
-
-```bash
-$ scripts/coverage.sh
-$ open target/cov/lcov-local/index.html
-```
-
-Why coverage? While most see coverage as a code quality metric, we see it primarily as a developer
-productivity metric. When a developer makes a change to the codebase, presumably it's a *solution* to
-some problem.  Our unit-test suite is how we encode the set of *problems* the codebase solves. Running
-the test suite should indicate that your change didn't *infringe* on anyone else's solutions. Adding a
-test *protects* your solution from future changes. Say you don't understand why a line of code exists,
-try deleting it and running the unit-tests. The nearest test failure should tell you what problem
-was solved by that code. If no test fails, go ahead and submit a Pull Request that asks, "what
-problem is solved by this code?" On the other hand, if a test does fail and you can think of a
-better way to solve the same problem, a Pull Request with your solution would most certainly be
-welcome! Likewise, if rewriting a test can better communicate what code it's protecting, please
-send us that patch!
+Click **Watch → Custom → Releases** on this repository for the launch.
