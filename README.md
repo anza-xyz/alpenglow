@@ -10,7 +10,12 @@ evaded prior review efforts
 The competition will be hosted in this repository, through the
 private vulnerability reporting feature
 
-**Full scope, rules, dates, and rewards are coming soon.** Submissions are not open yet, but you can already start looking at the code.
+**Full scope, rules, dates, and rewards are coming soon**
+
+Submissions are not open yet! Findings submitted before the competition
+commences will be treated as out-of-scope/informational as per today's
+security policy. You are of course free to start familiarizing yourself
+with the code at your leisure
 
 ## Start here
 
