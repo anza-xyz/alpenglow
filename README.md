@@ -1,6 +1,14 @@
 # Alpenglow Bug Bounty Competition
 
-Alpenglow is Solana's new consensus protocol. We're soon expanding the Agave bug bounty to cover it, and this repository is where the program will run.
+Alpenglow is Solana's new consensus protocol. During development,
+monorepo migration and internal audit phases, the Alpenglow logic
+has been excluded from scope of the Agave bug bounty program. To
+mark its introduction to eligibility, we're hosting a bug bounty
+competition to raise awareness and catch standing issues that have
+evaded prior review efforts
+
+The competition will be hosted in this repository, through the
+private vulnerability reporting feature
 
 **Full scope, rules, dates, and rewards are coming soon.** Submissions are not open yet, but you can already start looking at the code.
 
