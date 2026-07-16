@@ -1,4 +1,4 @@
-# Alpenglow is coming into the bug bounty's scope
+# Alpenglow Bug Bounty Competition
 
 Alpenglow is Solana's new consensus protocol. We're soon expanding the Agave bug bounty to cover it, and this repository is where the program will run.
 
