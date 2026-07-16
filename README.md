@@ -29,4 +29,4 @@ These are already fixed, so they won't be eligible once the program opens. Aim a
 ## Get notified
 
 Follow [@anza_xyz](https://x.com/anza_xyz) on X and **Watch** this repository.
-The launch will be announced in both places.
+Further competition details will be announced in both places.
