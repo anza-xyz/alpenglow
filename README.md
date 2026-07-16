@@ -39,8 +39,6 @@ Alpenglow has been under active review throughout its development. The consensus
 
 Browse them all: [Alpenglow consensus issues on Agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Ablocking-ag+label%3Aconsensus-team)
 
-These are already fixed, so they won't be eligible once the program opens. Aim at what's still live on Agave.
-
 ## Get notified
 
 Follow [@anza_xyz](https://x.com/anza_xyz) on X and **Watch** this repository.
