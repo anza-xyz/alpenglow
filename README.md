@@ -19,7 +19,7 @@ with the code at your leisure
 
 ## Start here
 
-The Alpenglow consensus code under review lives in
+The Alpenglow consensus code subject to the competition will be that hosted in the Anza's Agave Github repository
 [`anza-xyz/agave`](https://github.com/anza-xyz/agave). Begin with:
 
 - [`votor`](https://github.com/anza-xyz/agave/tree/master/votor): the voting engine
