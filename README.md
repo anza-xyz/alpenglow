@@ -29,7 +29,9 @@ The Alpenglow consensus code subject to the competition will be that hosted in t
 
 Background: the [Alpenglow whitepaper](https://www.anza.xyz/alpenglow-1-1) and [SIMD-0326](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0326-alpenglow.md).
 
-You will read and reproduce against Agave, and submit reports here once the program opens.
+To recap, the code subject to the competition resides in the _Agave
+repository_, while competition submissions will be made to _this
+repository_
 
 ## What we've already found
 
