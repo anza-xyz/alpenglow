@@ -35,9 +35,9 @@ repository_
 
 ## What we've already found
 
-Alpenglow has been under active review throughout its development. The consensus issues we've found and fixed are public on Agave, and they're the best sense of the target: the kind of safety, liveness, and certificate-handling bugs that matter here.
+The link below lists issues found during Alpenglow's development and review. They can point you to areas worth investigating:
 
-Browse them all: [Alpenglow consensus issues on Agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Ablocking-ag+label%3Aconsensus-team)
+[Alpenglow related issues on Agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Ablocking-ag+label%3Aconsensus-team)
 
 ## Get notified
 
