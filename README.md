@@ -1,118 +1,45 @@
-<p align="center">
-  <a href="https://anza.xyz">
-    <img alt="Anza" src="https://i.postimg.cc/VkKTnMM9/agave-logo-talc-1.png" width="250" />
-  </a>
-</p>
+# Alpenglow Bug Bounty Competition
 
-[![Solana crate](https://img.shields.io/crates/v/solana-core.svg)](https://crates.io/crates/solana-core)
-[![Solana documentation](https://docs.rs/solana-core/badge.svg)](https://docs.rs/solana-core)
-[![Build status](https://badge.buildkite.com/8cc350de251d61483db98bdfc895b9ea0ac8ffa4a32ee850ed.svg?branch=master)](https://buildkite.com/solana-labs/solana/builds?branch=master)
-[![codecov](https://codecov.io/gh/solana-labs/solana/branch/master/graph/badge.svg)](https://codecov.io/gh/solana-labs/solana)
+Alpenglow is Solana's new consensus protocol. During development,
+monorepo migration and internal audit phases, the Alpenglow logic
+has been excluded from scope of the Agave bug bounty program. To
+mark its introduction to eligibility, we're hosting a bug bounty
+competition to raise awareness and catch standing issues that have
+evaded prior review efforts
 
-# Building
+The competition will be hosted in this repository, through the
+private vulnerability reporting feature
 
-## **1. Install rustc, cargo and rustfmt.**
+**Full scope, rules, dates, and rewards are coming soon**
 
-```bash
-$ curl https://sh.rustup.rs -sSf | sh
-$ source $HOME/.cargo/env
-$ rustup component add rustfmt
-```
+Submissions are not open yet! Findings submitted before the competition
+commences will be treated as out-of-scope/informational as per today's
+security policy. You are of course free to start familiarizing yourself
+with the code at your leisure
 
-When building the master branch, please make sure you are using the latest stable rust version by running:
+## Start here
 
-```bash
-$ rustup update
-```
+The Alpenglow consensus code subject to the competition will be that hosted in the Anza's Agave Github repository
+[`anza-xyz/agave`](https://github.com/anza-xyz/agave). Begin with:
 
-When building a specific release branch, you should check the rust version in `ci/rust-version.sh` and if necessary, install that version by running:
-```bash
-$ rustup install VERSION
-```
-Note that if this is not the latest rust version on your machine, cargo commands may require an [override](https://rust-lang.github.io/rustup/overrides.html) in order to use the correct version.
+- [`votor`](https://github.com/anza-xyz/agave/tree/master/votor): the voting engine
+- [`votor-messages`](https://github.com/anza-xyz/agave/tree/master/votor-messages): vote and certificate types
+- [`bls-sigverify`](https://github.com/anza-xyz/agave/tree/master/bls-sigverify): BLS signature verification
+- [`bls-cert-verify`](https://github.com/anza-xyz/agave/tree/master/bls-cert-verify): certificate verification and stake-threshold checks
 
-On Linux systems you may need to install libssl-dev, pkg-config, zlib1g-dev, protobuf etc.
+Background: the [Alpenglow whitepaper](https://www.anza.xyz/alpenglow-1-1) and [SIMD-0326](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0326-alpenglow.md).
 
-On Ubuntu:
-```bash
-$ sudo apt-get update
-$ sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang cmake make libprotobuf-dev protobuf-compiler libclang-dev
-```
+To recap, the code subject to the competition resides in the _Agave
+repository_, while competition submissions will be made to _this
+repository_
 
-On Fedora:
-```bash
-$ sudo dnf install openssl-devel systemd-devel pkg-config zlib-devel llvm clang cmake make protobuf-devel protobuf-compiler perl-core libclang-dev
-```
+## What we've already found
 
-## **2. Download the source code.**
+The link below lists issues found during Alpenglow's development and review. They can point you to areas worth investigating:
 
-```bash
-$ git clone https://github.com/anza-xyz/agave.git
-$ cd agave
-```
+[Alpenglow related issues on Agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Ablocking-ag+label%3Aconsensus-team)
 
-## **3. Build.**
+## Get notified
 
-```bash
-$ ./cargo build
-```
-
-> [!NOTE]
-> Note that this builds a debug version that is **not suitable for running a testnet or mainnet validator**. Please read [`docs/src/cli/install.md`](docs/src/cli/install.md#build-from-source) for instructions to build a release version for test and production uses.
-
-# Testing
-
-**Run the test suite:**
-
-```bash
-$ ./cargo test
-```
-
-### Starting a local testnet
-
-Start your own testnet locally, instructions are in the [online docs](https://docs.anza.xyz/clusters/benchmark).
-
-### Accessing the remote development cluster
-
-* `devnet` - stable public cluster for development accessible via
-devnet.solana.com. Runs 24/7. Learn more about the [public clusters](https://docs.anza.xyz/clusters)
-
-# Benchmarking
-
-First, install the nightly build of rustc. `cargo bench` requires the use of the
-unstable features only available in the nightly build.
-
-```bash
-$ rustup install nightly
-```
-
-Run the benchmarks:
-
-```bash
-$ cargo +nightly bench
-```
-
-# Release Process
-
-The release process for this project is described [here](RELEASE.md).
-
-# Code coverage
-
-To generate code coverage statistics:
-
-```bash
-$ scripts/coverage.sh
-$ open target/cov/lcov-local/index.html
-```
-
-Why coverage? While most see coverage as a code quality metric, we see it primarily as a developer
-productivity metric. When a developer makes a change to the codebase, presumably it's a *solution* to
-some problem.  Our unit-test suite is how we encode the set of *problems* the codebase solves. Running
-the test suite should indicate that your change didn't *infringe* on anyone else's solutions. Adding a
-test *protects* your solution from future changes. Say you don't understand why a line of code exists,
-try deleting it and running the unit-tests. The nearest test failure should tell you what problem
-was solved by that code. If no test fails, go ahead and submit a Pull Request that asks, "what
-problem is solved by this code?" On the other hand, if a test does fail and you can think of a
-better way to solve the same problem, a Pull Request with your solution would most certainly be
-welcome! Likewise, if rewriting a test can better communicate what code it's protecting, please
-send us that patch!
+Follow [@anza_xyz](https://x.com/anza_xyz) on X and **Watch** this repository.
+Further competition details will be announced in both places.
