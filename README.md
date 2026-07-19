@@ -37,7 +37,7 @@ repository_
 
 The link below lists issues found during Alpenglow's development and review. They can point you to areas worth investigating:
 
-[Alpenglow related issues on Agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Ablocking-ag+label%3Aconsensus-team)
+[Alpenglow related issues on Agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Aconsensus-team)
 
 ## Get notified
 
