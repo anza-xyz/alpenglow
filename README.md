@@ -11,11 +11,12 @@ evaded prior review efforts
 - **Submission window:** 2026-08-05 16:00 UTC to 2026-08-19 16:00 UTC
 - **How to submit:** open a [GitHub Security Advisory](https://github.com/anza-xyz/alpenglow/security/advisories/new)
   on this repository, one finding per advisory
-- **Full rules:** [RULES.md](RULES.md) — scope, severity categories,
-  rewards, eligibility, and duplicate policy
+- **Full rules:** [RULES.md](RULES.md) (scope, severity categories,
+  rewards, eligibility, and duplicate policy)
 
-Never open a public GitHub issue to report a finding. Findings
-submitted outside the window are handled under the standing
+Do not disclose a finding publicly (for example as a GitHub issue
+here or on `agave`), as public findings are ineligible for a reward.
+Findings submitted outside the window are handled under the standing
 [Agave security policy](https://github.com/anza-xyz/agave/blob/master/SECURITY.md)
 
 ## Start here
@@ -29,7 +30,7 @@ The Alpenglow consensus code subject to the competition is hosted in Anza's Agav
 - [`bls-cert-verify`](https://github.com/anza-xyz/agave/tree/master/bls-cert-verify): certificate verification and stake-threshold checks
 
 These four crates are the core, but the scope extends to the
-Alpenglow integration surface across the validator — see
+Alpenglow integration surface across the validator; see
 [RULES.md section 3](RULES.md#3-scope) for the full list.
 
 Background: the [Alpenglow whitepaper](https://www.anza.xyz/alpenglow-1-1) and [SIMD-0326](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0326-alpenglow.md).
@@ -41,7 +42,7 @@ repository_
 ## Known issues
 
 The tracker below lists issues found during Alpenglow's development
-and review. They can point you to areas worth investigating — but
+and review. They can point you to areas worth investigating, but
 they are also the known-issues baseline: anything already listed
 there (or otherwise public) at the time you submit is out of scope
 ([RULES.md section 8](RULES.md#8-known-issues)):
