@@ -3,7 +3,7 @@
 This repository hosts the Alpenglow Bug Bounty Competition. All
 competition reporting is governed by [RULES.md](RULES.md).
 
-- Submit findings through the [submission portal](https://alpenglow.anza.xyz/),
+- Submit findings through the submission portal at https://alpenglow.anza.xyz/,
   which requires a non-refundable 0.5 SOL burn and files each finding as a
   GitHub Security Advisory on this repository, one finding per advisory
 - Submissions received through any other channel are ineligible for the

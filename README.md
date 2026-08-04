@@ -9,7 +9,7 @@ evaded prior review efforts
 
 - **Prize pool:** up to 50,000 SOL
 - **Submission window:** 2026-08-05 16:00 UTC to 2026-08-19 16:00 UTC
-- **How to submit:** use the [submission portal](https://alpenglow.anza.xyz/);
+- **How to submit:** use the submission portal at https://alpenglow.anza.xyz/;
   sign in with GitHub, burn a non-refundable 0.5 SOL, and the portal files
   your finding as a [GitHub Security Advisory](https://github.com/anza-xyz/alpenglow/security/advisories)
   on this repository, one finding per advisory. Submissions received
@@ -42,7 +42,7 @@ Background: the [Alpenglow whitepaper](https://www.anza.xyz/alpenglow-1-1) and [
 
 To recap, the code subject to the competition resides in the _Agave
 repository_, while competition submissions are made through the
-[submission portal](https://alpenglow.anza.xyz/) and land as security
+submission portal at https://alpenglow.anza.xyz/ and land as security
 advisories on _this repository_
 
 ## Known issues

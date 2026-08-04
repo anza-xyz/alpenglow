@@ -2,7 +2,7 @@
 
 Anza is running a time-boxed bug bounty competition on the Alpenglow consensus stack in Agave, with a prize pool of up to 50,000 SOL. For the competition window, the standing Agave bug bounty's exclusion of Alpenglow is lifted for the in-scope code. The standing program ([`agave/SECURITY.md`](https://github.com/anza-xyz/agave/blob/master/SECURITY.md)) is unchanged for everything else.
 
-Reports are submitted through the [submission portal](https://alpenglow.anza.xyz/), which files them as security advisories on the [`anza-xyz/alpenglow`](https://github.com/anza-xyz/alpenglow) repository; that repository hosts the competition rules and the advisory intake. The code under review is the Alpenglow consensus stack in the main [`anza-xyz/agave`](https://github.com/anza-xyz/agave) repository: `master` in these rules means `agave` `master`, and each report cites the `agave` commit it was found against (section 2). Known issues stay tracked in agave (section 8).
+Reports are submitted through the submission portal at https://alpenglow.anza.xyz/, which files them as security advisories on the [`anza-xyz/alpenglow`](https://github.com/anza-xyz/alpenglow) repository; that repository hosts the competition rules and the advisory intake. The code under review is the Alpenglow consensus stack in the main [`anza-xyz/agave`](https://github.com/anza-xyz/agave) repository: `master` in these rules means `agave` `master`, and each report cites the `agave` commit it was found against (section 2). Known issues stay tracked in agave (section 8).
 
 ---
 
@@ -12,7 +12,7 @@ Reports are submitted through the [submission portal](https://alpenglow.anza.xyz
 - **Submission window:** 2026-08-05 16:00 UTC to 2026-08-19 16:00 UTC (2 weeks, Wednesday start)  
 - **Scope basis:** continuous `master` HEAD, moving window (section 2)  
 - **Adjudication close:** 2026-09-02, then payouts  
-- **Submission channel:** the [submission portal](https://alpenglow.anza.xyz/), which requires a non-refundable 0.5 SOL burn and files each finding as a GitHub Security Advisory on `anza-xyz/alpenglow`, one finding per advisory. Submissions received through any other channel are ineligible
+- **Submission channel:** the submission portal at https://alpenglow.anza.xyz/, which requires a non-refundable 0.5 SOL burn and files each finding as a GitHub Security Advisory on `anza-xyz/alpenglow`, one finding per advisory. Submissions received through any other channel are ineligible
 
 ---
 
@@ -124,7 +124,7 @@ Payouts are lump-sum after the adjudication close and after KYC, in 12-month loc
 - A finding must be present in the cited in-window `master` commit and still unfixed on `master` when submitted; it is reproduced at that commit. Once an issue is fixed it is ineligible.  
 - It must not be public or in the known-issues tracker (section 8) as of submission.  
 - One finding per advisory; advisories bundling multiple findings are closed as invalid and hold no duplicate-report standing.  
-- Report through the [submission portal](https://alpenglow.anza.xyz/). Submissions received through any other channel are ineligible, including advisories opened directly on `anza-xyz/alpenglow`; do not open a public GitHub issue to report a finding.  
+- Report through the submission portal at https://alpenglow.anza.xyz/. Submissions received through any other channel are ineligible, including advisories opened directly on `anza-xyz/alpenglow`; do not open a public GitHub issue to report a finding.  
 - Any attempt to cheat the submission system or the competition process leads to disqualification.  
 - Each advisory is self-contained: a clear title, a detailed description, reproduction steps, and the proof of concept, all inline. No attachments and no external file links; exploitation detail goes only in the advisory.  
 - Enable two-factor authentication on your GitHub account.  
