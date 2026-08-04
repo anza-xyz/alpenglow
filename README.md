@@ -9,13 +9,18 @@ evaded prior review efforts
 
 - **Prize pool:** up to 50,000 SOL
 - **Submission window:** 2026-08-05 16:00 UTC to 2026-08-19 16:00 UTC
-- **How to submit:** open a [GitHub Security Advisory](https://github.com/anza-xyz/alpenglow/security/advisories/new)
-  on this repository, one finding per advisory
+- **How to submit:** use the [submission portal](https://alpenglow.anza.xyz/);
+  sign in with GitHub, burn a non-refundable 0.5 SOL, and the portal files
+  your finding as a [GitHub Security Advisory](https://github.com/anza-xyz/alpenglow/security/advisories)
+  on this repository, one finding per advisory. Submissions received
+  through any other channel are ineligible
 - **Full rules:** [RULES.md](RULES.md) (scope, severity categories,
   rewards, eligibility, and duplicate policy)
 
 Do not disclose a finding publicly (for example as a GitHub issue
 here or on `agave`), as public findings are ineligible for a reward.
+Any attempt to cheat the submission system or the competition process
+will lead to disqualification.
 Findings submitted outside the window are handled under the standing
 [Agave security policy](https://github.com/anza-xyz/agave/blob/master/SECURITY.md)
 
@@ -36,8 +41,9 @@ Alpenglow integration surface across the validator; see
 Background: the [Alpenglow whitepaper](https://www.anza.xyz/alpenglow-1-1) and [SIMD-0326](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0326-alpenglow.md).
 
 To recap, the code subject to the competition resides in the _Agave
-repository_, while competition submissions will be made to _this
-repository_
+repository_, while competition submissions are made through the
+[submission portal](https://alpenglow.anza.xyz/) and land as security
+advisories on _this repository_
 
 ## Known issues
 
