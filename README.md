@@ -55,6 +55,10 @@ there (or otherwise public) at the time you submit is out of scope
 
 [Alpenglow related issues on Agave](https://github.com/anza-xyz/agave/issues?q=is%3Aissue+label%3Aconsensus-team%2Cblocking-ag)
 
+In addition, [KNOWN_NON_ISSUES.md](KNOWN_NON_ISSUES.md) lists rejection
+criteria and known non-issues. Check it before submitting to avoid
+re-reporting closed work.
+
 ## Get notified
 
 Follow [@anza_xyz](https://x.com/anza_xyz) on X and **Watch** this repository.
