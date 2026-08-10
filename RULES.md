@@ -156,13 +156,15 @@ Anything already public is out of scope: existing public `agave` GitHub issues, 
 
 Known-but-unpatched issues are handled by fixing them before the window or by scoping the affected path out of section 3. There is no partial-payout tier for known issues.
 
+[`KNOWN_NON_ISSUES.md`](KNOWN_NON_ISSUES.md) in this repository lists rejection criteria and known non-issues (intentional behavior, bounded impact, or already fixed). Review it before submitting: reports matching an entry without demonstrating a qualified impact will be closed.
+
 ---
 
 ## 9. Adjudication
 
 - Anza determines validity, severity, and duplication, and is the researcher-facing contact.  
 - The Solana Foundation makes the final decision, including on scope, policy, and budget. Where the Foundation departs from Anza's determination, that is documented.  
-- Service levels: a first response within 72 hours, an initial severity determination within 7 days of submission, and final adjudication of every valid submission by the adjudication close (section 1).  
+- Submissions are assessed first come, first served, and every valid submission receives final adjudication by the adjudication close (section 1).  
 - Payouts are lump-sum after the adjudication close.
 
 ---
